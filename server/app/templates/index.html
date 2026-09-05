@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>USBIPS — Central Management Console</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <header>
+      <div class="brand">
+        <div class="brand-icon">U</div>
+        <div>
+          <h1>USBIPS Central Management Console</h1>
+          <p>Zero-Trust USB Intrusion Prevention & Fleetwide Hardware Authorization</p>
+        </div>
+      </div>
+      <div class="header-status">
+        <div class="live-indicator">
+          <div class="pulse-dot"></div>
+          <span>LIVE FLEET MONITORING</span>
+        </div>
+        <button class="btn btn-secondary btn-sm" onclick="loadAllData()">Refresh Now</button>
+      </div>
+    </header>
+
+    <!-- Stats Grid -->
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-title">Online Endpoints</span>
+        <span class="stat-value" id="stat-clients">0</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-title">Master Allowlist Devices</span>
+        <span class="stat-value" id="stat-allowlist">0</span>
+      </div>
+      <div class="stat-card alert-card">
+        <span class="stat-title">Pending Authorization Requests</span>
+        <span class="stat-value" id="stat-pending">0</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-title">Total Ingested Events</span>
+        <span class="stat-value" id="stat-events">0</span>
+      </div>
+    </div>
+
+    <!-- Section 1: Pending Requests -->
+    <div class="section" id="pending-section">
+      <div class="section-header">
+        <div class="section-title">
+          <span>Pending Authorization Requests</span>
+          <span class="badge-count warning-count" id="pending-count-badge">0</span>
+        </div>
+      </div>
+      <div id="pending-container" class="pending-grid">
+        <p style="color: var(--text-muted); font-size: 13px;">No devices currently awaiting authorization.</p>
+      </div>
+    </div>
+
+    <!-- Section 2: Master Allowlist -->
+    <div class="section">
+      <div class="section-header">
+        <div class="section-title">
+          <span>Master Allowlist</span>
+          <span class="badge-count" id="allowlist-count-badge">0</span>
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="openAddModal()">+ Add Device Manually</button>
+      </div>
+      <div class="table-responsive">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Vendor ID (VID)</th>
+              <th>Product ID (PID)</th>
+              <th>Serial Number</th>
+              <th>Type</th>
+              <th>Description / Model</th>
+              <th>Approved Date</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="allowlist-tbody">
+            <tr><td colspan="8" style="text-align:center; color: var(--text-muted);">Loading allowlist...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Section 3: Registered Clients -->
+    <div class="section">
+      <div class="section-header">
+        <div class="section-title">
+          <span>Connected Client Endpoints</span>
+        </div>
+      </div>
+      <div class="table-responsive">
+        <table>
+          <thead>
+            <tr>
+              <th>Client ID (Machine GUID)</th>
+              <th>Hostname</th>
+              <th>IP Address</th>
+              <th>OS / Platform</th>
+              <th>Version</th>
+              <th>Last Heartbeat</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="clients-tbody">
+            <tr><td colspan="7" style="text-align:center; color: var(--text-muted);">Loading endpoints...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Section 4: Central Audit Events -->
+    <div class="section">
+      <div class="section-header">
+        <div class="section-title">
+          <span>Recent Security Audit Stream</span>
+        </div>
+      </div>
+      <div class="table-responsive">
+        <table>
+          <thead>
+            <tr>
+              <th>Timestamp (UTC)</th>
+              <th>Event Type</th>
+              <th>Client</th>
+              <th>Hardware (VID:PID)</th>
+              <th>Decision</th>
+              <th>Reason</th>
+            </tr>
+          </thead>
+          <tbody id="events-tbody">
+            <tr><td colspan="6" style="text-align:center; color: var(--text-muted);">Loading security events...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Device Modal -->
+  <div class="modal" id="addDeviceModal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 style="font-size: 16px;">Add Device to Master Allowlist</h3>
+        <button class="btn btn-secondary btn-sm" onclick="closeAddModal()">&times;</button>
+      </div>
+      <form id="addDeviceForm" onsubmit="handleAddDevice(event)">
+        <div class="form-group">
+          <label>Vendor ID (4 Hex Digits e.g. 046D)</label>
+          <input type="text" id="m_vid" class="form-control" placeholder="046D" required maxlength="10">
+        </div>
+        <div class="form-group">
+          <label>Product ID (4 Hex Digits e.g. C077)</label>
+          <input type="text" id="m_pid" class="form-control" placeholder="C077" required maxlength="10">
+        </div>
+        <div class="form-group">
+          <label>Serial Number</label>
+          <input type="text" id="m_serial" class="form-control" placeholder="e.g. 200711130200" required>
+        </div>
+        <div class="form-group">
+          <label>Device Category</label>
+          <select id="m_type" class="form-control">
+            <option value="HID">HID (Keyboard / Mouse / Input)</option>
+            <option value="STORAGE">STORAGE (Flash Drive / SSD)</option>
+            <option value="NETWORK">NETWORK (Ethernet / NDIS)</option>
+            <option value="OTHER">OTHER</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Description / Device Name</label>
+          <input type="text" id="m_desc" class="form-control" placeholder="Logitech Optical USB Mouse">
+        </div>
+        <div class="form-group">
+          <label>Manufacturer</label>
+          <input type="text" id="m_mfg" class="form-control" placeholder="Logitech Inc.">
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" onclick="closeAddModal()">Cancel</button>
+          <button type="submit" class="btn btn-success">Save to Allowlist</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Toast Notification -->
+  <div id="toast"></div>
+
+  <script>
+    function showToast(message, isError = false) {
+      const t = document.getElementById("toast");
+      t.innerText = message;
+      t.style.backgroundColor = isError ? "#dc2626" : "#059669";
+      t.style.display = "block";
+      setTimeout(() => { t.style.display = "none"; }, 3500);
+    }
+
+    function openAddModal() {
+      document.getElementById("addDeviceModal").classList.add("active");
+    }
+
+    function closeAddModal() {
+      document.getElementById("addDeviceModal").classList.remove("active");
+      document.getElementById("addDeviceForm").reset();
+    }
+
+    async function handleAddDevice(e) {
+      e.preventDefault();
+      const payload = {
+        vendor_id: document.getElementById("m_vid").value.trim().toUpperCase(),
+        product_id: document.getElementById("m_pid").value.trim().toUpperCase(),
+        serial_number: document.getElementById("m_serial").value.trim(),
+        device_type: document.getElementById("m_type").value,
+        description: document.getElementById("m_desc").value.trim(),
+        manufacturer: document.getElementById("m_mfg").value.trim()
+      };
+
+      try {
+        const res = await fetch("/api/devices", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        if (res.ok) {
+          showToast("Device added to master allowlist!");
+          closeAddModal();
+          loadAllData();
+        } else {
+          const err = await res.json();
+          showToast("Error: " + (err.detail || "Failed to add device"), true);
+        }
+      } catch (ex) {
+        showToast("Network error: " + ex.message, true);
+      }
+    }
+
+    async function approveRequest(requestId) {
+      try {
+        const res = await fetch(`/api/requests/${requestId}/approve`, { method: "POST" });
+        if (res.ok) {
+          showToast("Device approved & added to master allowlist!");
+          loadAllData();
+        } else {
+          showToast("Failed to approve request", true);
+        }
+      } catch (ex) {
+        showToast("Error: " + ex.message, true);
+      }
+    }
+
+    async function declineRequest(requestId) {
+      if (!confirm("Are you sure you want to decline and block this device?")) return;
+      try {
+        const res = await fetch(`/api/requests/${requestId}/decline`, { method: "POST" });
+        if (res.ok) {
+          showToast("Device declined. Client will keep device quarantined.");
+          loadAllData();
+        } else {
+          showToast("Failed to decline request", true);
+        }
+      } catch (ex) {
+        showToast("Error: " + ex.message, true);
+      }
+    }
+
+    async function revokeDevice(deviceId, vid, pid) {
+      if (!confirm(`Revoke authorization for VID: ${vid} PID: ${pid}? Connected clients will block this device.`)) return;
+      try {
+        const res = await fetch(`/api/devices/${deviceId}`, { method: "DELETE" });
+        if (res.ok) {
+          showToast(`Device ${vid}:${pid} revoked from allowlist`);
+          loadAllData();
+        } else {
+          showToast("Failed to revoke device", true);
+        }
+      } catch (ex) {
+        showToast("Error: " + ex.message, true);
+      }
+    }
+
+    async function loadStats() {
+      try {
+        const res = await fetch("/api/stats");
+        if (res.ok) {
+          const data = await res.json();
+          document.getElementById("stat-clients").innerText = data.active_clients;
+          document.getElementById("stat-allowlist").innerText = data.allowed_devices;
+          document.getElementById("stat-pending").innerText = data.pending_requests;
+          document.getElementById("stat-events").innerText = data.total_events;
+          document.getElementById("pending-count-badge").innerText = data.pending_requests;
+          document.getElementById("allowlist-count-badge").innerText = data.allowed_devices;
+        }
+      } catch (e) {}
+    }
+
+    async function loadPendingRequests() {
+      try {
+        const res = await fetch("/api/requests/pending");
+        if (!res.ok) return;
+        const requests = await res.json();
+        const container = document.getElementById("pending-container");
+        
+        if (requests.length === 0) {
+          container.innerHTML = `<p style="color: var(--text-muted); font-size: 13px; grid-column: 1/-1;">All hardware requests reviewed. No pending devices.</p>`;
+          return;
+        }
+
+        container.innerHTML = requests.map(req => `
+          <div class="pending-card">
+            <div class="pending-card-header">
+              <div>
+                <div class="pending-card-title">${req.description || "Unknown USB Device"}</div>
+                <div class="pending-meta">Client: ${req.client_id} | Requested: ${req.requested_at}</div>
+              </div>
+              <span class="badge badge-ask">AWAITING REVIEW</span>
+            </div>
+            <div class="pending-details">
+              <div><span class="detail-label">Vendor ID:</span> <span class="detail-val">${req.vendor_id}</span></div>
+              <div><span class="detail-label">Product ID:</span> <span class="detail-val">${req.product_id}</span></div>
+              <div><span class="detail-label">Serial:</span> <span class="detail-val">${req.serial_number}</span></div>
+              <div><span class="detail-label">Type:</span> <span class="badge badge-${req.device_type.toLowerCase()}">${req.device_type}</span></div>
+            </div>
+            <div class="pending-actions">
+              <button class="btn btn-success btn-sm" onclick="approveRequest('${req.request_id}')">✓ Approve & Add to Allowlist</button>
+              <button class="btn btn-danger btn-sm" onclick="declineRequest('${req.request_id}')">✕ Decline (Block)</button>
+            </div>
+          </div>
+        `).join("");
+      } catch (e) {}
+    }
+
+    async function loadAllowlist() {
+      try {
+        const res = await fetch("/api/devices");
+        if (!res.ok) return;
+        const devices = await res.json();
+        const tbody = document.getElementById("allowlist-tbody");
+        
+        if (devices.length === 0) {
+          tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; color: var(--text-muted);">No devices in master allowlist. Add devices manually or approve pending requests.</td></tr>`;
+          return;
+        }
+
+        tbody.innerHTML = devices.map(d => `
+          <tr>
+            <td>#${d.id}</td>
+            <td><code>${d.vendor_id}</code></td>
+            <td><code>${d.product_id}</code></td>
+            <td><code>${d.serial_number}</code></td>
+            <td><span class="badge badge-${d.device_type.toLowerCase()}">${d.device_type}</span></td>
+            <td>${d.description || d.manufacturer || "N/A"}</td>
+            <td>${d.created_at}</td>
+            <td>
+              <button class="btn btn-danger btn-sm" onclick="revokeDevice(${d.id}, '${d.vendor_id}', '${d.product_id}')">Revoke</button>
+            </td>
+          </tr>
+        `).join("");
+      } catch (e) {}
+    }
+
+    async function loadClients() {
+      try {
+        const res = await fetch("/api/clients");
+        if (!res.ok) return;
+        const clients = await res.json();
+        const tbody = document.getElementById("clients-tbody");
+
+        if (clients.length === 0) {
+          tbody.innerHTML = `<tr><td colspan="7" style="text-align:center; color: var(--text-muted);">No clients registered yet.</td></tr>`;
+          return;
+        }
+
+        tbody.innerHTML = clients.map(c => `
+          <tr>
+            <td><code>${c.client_id}</code></td>
+            <td><strong>${c.hostname}</strong></td>
+            <td>${c.ip_address}</td>
+            <td>${c.os_version}</td>
+            <td>${c.agent_version}</td>
+            <td>${c.last_heartbeat}</td>
+            <td><span class="badge ${c.is_online ? 'badge-online' : 'badge-offline'}">${c.status}</span></td>
+          </tr>
+        `).join("");
+      } catch (e) {}
+    }
+
+    async function loadEvents() {
+      try {
+        const res = await fetch("/api/events?limit=25");
+        if (!res.ok) return;
+        const events = await res.json();
+        const tbody = document.getElementById("events-tbody");
+
+        if (events.length === 0) {
+          tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; color: var(--text-muted);">No audit events received yet.</td></tr>`;
+          return;
+        }
+
+        tbody.innerHTML = events.map(e => `
+          <tr>
+            <td>${e.timestamp}</td>
+            <td><strong>${e.event_type}</strong></td>
+            <td><code>${e.client_id.substring(0, 8)}...</code></td>
+            <td><code>${e.vendor_id || "N/A"}:${e.product_id || "N/A"}</code></td>
+            <td><span class="badge badge-${(e.decision || 'other').toLowerCase()}">${e.decision || "-"}</span></td>
+            <td>${e.reason}</td>
+          </tr>
+        `).join("");
+      } catch (e) {}
+    }
+
+    function loadAllData() {
+      loadStats();
+      loadPendingRequests();
+      loadAllowlist();
+      loadClients();
+      loadEvents();
+    }
+
+    // Initial load
+    loadAllData();
+
+    // Auto-poll every 3 seconds
+    setInterval(loadAllData, 3000);
+  </script>
+</body>
+</html>
