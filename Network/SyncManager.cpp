@@ -1,8 +1,13 @@
+#include <winsock2.h>
+#include <ws2tcpip.h>
+
 #include "SyncManager.h"
 #include "../Enforcement/EnforcementManager.h"
 #include "../Presence/DevicePresenceMonitor.h"
 
 #include <iostream>
+
+#pragma comment(lib, "ws2_32.lib")
 
 SyncManager& SyncManager::Instance()
 {
@@ -33,6 +38,40 @@ std::wstring SyncManager::GetSystemHostname()
         return std::wstring(buffer, size);
     }
     return L"Windows-Host";
+}
+
+std::wstring SyncManager::GetSystemIpAddress()
+{
+    WSADATA wsaData;
+    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
+    {
+        return L"127.0.0.1";
+    }
+
+    char hostname[256] = { 0 };
+    if (gethostname(hostname, sizeof(hostname)) == 0)
+    {
+        struct addrinfo hints{}, *res = nullptr;
+        hints.ai_family = AF_INET;
+        hints.ai_socktype = SOCK_STREAM;
+
+        if (getaddrinfo(hostname, nullptr, &hints, &res) == 0 && res != nullptr)
+        {
+            char ipStr[INET_ADDRSTRLEN] = { 0 };
+            struct sockaddr_in* ipv4 = reinterpret_cast<struct sockaddr_in*>(res->ai_addr);
+            inet_ntop(AF_INET, &(ipv4->sin_addr), ipStr, sizeof(ipStr));
+            freeaddrinfo(res);
+            WSACleanup();
+
+            if (strlen(ipStr) > 0)
+            {
+                return RestClient::Utf8ToWide(ipStr);
+            }
+        }
+    }
+
+    WSACleanup();
+    return L"127.0.0.1";
 }
 
 std::wstring SyncManager::GetSystemOsVersion()
@@ -76,6 +115,13 @@ void SyncManager::Stop()
     m_running.store(false);
     m_cv.notify_all();
 
+    // Gracefully inform central server that client is disconnecting
+    if (m_serverConnected.load())
+    {
+        std::wstring clientId = EventLogger::Instance().GetClientId();
+        RestClient::Instance().SendHeartbeat(clientId, L"OFFLINE");
+    }
+
     if (m_workerThread.joinable())
     {
         m_workerThread.join();
@@ -111,12 +157,16 @@ bool SyncManager::PerformSyncCycle()
         if (!m_clientRegistered.load())
         {
             std::wstring hostname = GetSystemHostname();
+            std::wstring ipAddress = GetSystemIpAddress();
             std::wstring osVersion = GetSystemOsVersion();
-            if (RestClient::Instance().RegisterClient(clientId, hostname, osVersion, L"1.0.0"))
+            if (RestClient::Instance().RegisterClient(clientId, hostname, ipAddress, osVersion, L"1.0.0"))
             {
                 m_clientRegistered.store(true);
-                std::wcout << L"[SYNC] Client successfully registered with Central Server. Client ID: "
-                           << clientId << L"\n";
+                std::wcout << L"[SYNC] Client successfully registered with Central Server.\n"
+                           << L"       Client ID   : " << clientId << L"\n"
+                           << L"       Hostname    : " << hostname << L"\n"
+                           << L"       IP Address  : " << ipAddress << L"\n"
+                           << L"       OS Version  : " << osVersion << L"\n";
             }
         }
 

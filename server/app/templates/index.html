@@ -113,10 +113,11 @@
               <th>Version</th>
               <th>Last Heartbeat</th>
               <th>Status</th>
+              <th style="width: 90px;">Actions</th>
             </tr>
           </thead>
           <tbody id="clients-tbody">
-            <tr><td colspan="7" style="text-align:center; color: var(--text-muted);">Loading endpoints...</td></tr>
+            <tr><td colspan="8" style="text-align:center; color: var(--text-muted);">Loading endpoints...</td></tr>
           </tbody>
         </table>
       </div>
@@ -467,7 +468,7 @@
         const tbody = document.getElementById("clients-tbody");
 
         if (clients.length === 0) {
-          tbody.innerHTML = `<tr><td colspan="7" style="text-align:center; color: var(--text-muted);">No clients registered yet.</td></tr>`;
+          tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; color: var(--text-muted);">No clients registered yet.</td></tr>`;
           return;
         }
 
@@ -480,9 +481,29 @@
             <td>${c.agent_version}</td>
             <td>${c.last_heartbeat}</td>
             <td><span class="badge ${c.is_online ? 'badge-online' : 'badge-offline'}">${c.status}</span></td>
+            <td>
+              <button class="btn btn-danger btn-sm" onclick="removeClient('${c.client_id}')">Remove</button>
+            </td>
           </tr>
         `).join("");
       } catch (e) {}
+    }
+
+    async function removeClient(clientId) {
+      if (!confirm(`Are you sure you want to deregister and remove client ${clientId}?`)) {
+        return;
+      }
+      try {
+        const res = await fetch(`/api/clients/${clientId}`, { method: "DELETE" });
+        if (res.ok) {
+          showToast(`Client removed successfully`);
+          loadAllData();
+        } else {
+          showToast("Failed to remove client", true);
+        }
+      } catch (ex) {
+        showToast("Error: " + ex.message, true);
+      }
     }
 
     async function loadEvents() {

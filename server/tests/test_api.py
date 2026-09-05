@@ -260,5 +260,52 @@ class TestUSBIPSServer(unittest.TestCase):
         self.assertGreaterEqual(stats["total_events"], 2)
         self.assertGreaterEqual(stats["active_clients"], 1)
 
+    def test_08_client_management_endpoints(self):
+        client_data = {
+            "client_id": "test-guid-to-deregister-999",
+            "hostname": "TEMP-WORKSTATION",
+            "ip_address": "10.0.0.99",
+            "os_version": "Windows 11",
+            "agent_version": "1.0.0"
+        }
+        # 1. Register
+        reg_res = self.client.post("/api/clients/register", json=client_data)
+        self.assertEqual(reg_res.status_code, 200)
+
+        # 2. Get single client
+        get_res = self.client.get("/api/clients/test-guid-to-deregister-999")
+        self.assertEqual(get_res.status_code, 200)
+        client_info = get_res.json()
+        self.assertEqual(client_info["hostname"], "TEMP-WORKSTATION")
+        self.assertEqual(client_info["ip_address"], "10.0.0.99")
+        self.assertTrue(client_info["is_online"])
+        self.assertEqual(client_info["status"], "ONLINE")
+
+        # 3. Graceful offline notification
+        hb_res = self.client.post("/api/clients/heartbeat", json={
+            "client_id": "test-guid-to-deregister-999",
+            "status": "OFFLINE"
+        })
+        self.assertEqual(hb_res.status_code, 200)
+
+        # 4. Verify client shows offline
+        get_after = self.client.get("/api/clients/test-guid-to-deregister-999")
+        self.assertEqual(get_after.status_code, 200)
+        self.assertFalse(get_after.json()["is_online"])
+        self.assertEqual(get_after.json()["status"], "OFFLINE")
+
+        # 5. Deregister / Delete client
+        del_res = self.client.delete("/api/clients/test-guid-to-deregister-999")
+        self.assertEqual(del_res.status_code, 200)
+
+        # 6. Verify client returns 404
+        not_found_res = self.client.get("/api/clients/test-guid-to-deregister-999")
+        self.assertEqual(not_found_res.status_code, 404)
+
+        # 7. Verify DELETE on non-existent client returns 404
+        del_404_res = self.client.delete("/api/clients/test-guid-to-deregister-999")
+        self.assertEqual(del_404_res.status_code, 404)
+
 if __name__ == "__main__":
     unittest.main()
+

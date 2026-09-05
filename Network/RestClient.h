@@ -38,6 +38,7 @@ public:
     bool RegisterClient(
         const std::wstring& clientId,
         const std::wstring& hostname,
+        const std::wstring& ipAddress,
         const std::wstring& osVersion,
         const std::wstring& agentVersion = L"1.0.0"
     );

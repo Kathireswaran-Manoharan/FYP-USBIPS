@@ -41,6 +41,7 @@ private:
 
     void WorkerLoop();
     std::wstring GetSystemHostname();
+    std::wstring GetSystemIpAddress();
     std::wstring GetSystemOsVersion();
 
     AllowlistManager* m_allowlist;

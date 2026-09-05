@@ -187,6 +187,7 @@ bool RestClient::IsServerOnline()
 bool RestClient::RegisterClient(
     const std::wstring& clientId,
     const std::wstring& hostname,
+    const std::wstring& ipAddress,
     const std::wstring& osVersion,
     const std::wstring& agentVersion)
 {
@@ -195,6 +196,7 @@ bool RestClient::RegisterClient(
         nlohmann::json payload;
         payload["client_id"] = WideToUtf8(clientId);
         payload["hostname"] = WideToUtf8(hostname);
+        payload["ip_address"] = WideToUtf8(ipAddress);
         payload["os_version"] = WideToUtf8(osVersion);
         payload["agent_version"] = WideToUtf8(agentVersion);
 
