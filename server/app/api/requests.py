@@ -51,6 +51,36 @@ def list_all_requests(status_filter: Optional[str] = Query(None, alias="status")
 def list_pending_requests():
     return list_all_requests(status_filter="PENDING")
 
+@router.get("/{request_id}", response_model=PendingRequestResponse)
+def get_request_by_id(request_id: str):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT request_id, client_id, vendor_id, product_id, serial_number,
+                   device_type, description, device_path, status, requested_at,
+                   decided_at, decision_by
+            FROM pending_requests
+            WHERE request_id = ?;
+        """, (request_id,))
+        r = cursor.fetchone()
+        if not r:
+            raise HTTPException(status_code=404, detail="Request not found")
+            
+        return PendingRequestResponse(
+            request_id=r["request_id"],
+            client_id=r["client_id"],
+            vendor_id=r["vendor_id"],
+            product_id=r["product_id"],
+            serial_number=r["serial_number"],
+            device_type=r["device_type"] or "OTHER",
+            description=r["description"] or "",
+            device_path=r["device_path"] or "",
+            status=r["status"],
+            requested_at=r["requested_at"] or "",
+            decided_at=r["decided_at"],
+            decision_by=r["decision_by"]
+        )
+
 @router.post("/{request_id}/approve", response_model=dict)
 def approve_request(request_id: str, admin_user: str = "Admin"):
     now = utc_now_iso()

@@ -69,7 +69,10 @@
           <span>Master Allowlist</span>
           <span class="badge-count" id="allowlist-count-badge">0</span>
         </div>
-        <button class="btn btn-primary btn-sm" onclick="openAddModal()">+ Add Device Manually</button>
+        <div style="display: flex; gap: 10px; align-items: center;">
+          <input type="text" id="allowlist-search" class="form-control" style="width: 220px; padding: 6px 12px; font-size: 13px;" placeholder="Search VID / PID / Serial..." oninput="loadAllowlist()">
+          <button class="btn btn-primary btn-sm" onclick="openAddModal()">+ Add Device Manually</button>
+        </div>
       </div>
       <div class="table-responsive">
         <table>
@@ -186,6 +189,46 @@
         <div class="modal-footer">
           <button type="button" class="btn btn-secondary" onclick="closeAddModal()">Cancel</button>
           <button type="submit" class="btn btn-success">Save to Allowlist</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Edit Device Modal (Task 9 PUT/PATCH) -->
+  <div class="modal" id="editDeviceModal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 style="font-size: 16px;">Edit Allowlisted Device</h3>
+        <button class="btn btn-secondary btn-sm" onclick="closeEditModal()">&times;</button>
+      </div>
+      <form id="editDeviceForm" onsubmit="handleEditDevice(event)">
+        <input type="hidden" id="edit_dev_id">
+        <div class="form-group">
+          <label>Hardware Identifiers</label>
+          <div style="font-family: monospace; font-size: 13px; color: #38bdf8; background: #0f172a; padding: 8px 12px; border-radius: 6px;" id="edit_hw_info">
+            VID: ---- | PID: ---- | S/N: ----
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Device Category</label>
+          <select id="edit_type" class="form-control">
+            <option value="HID">HID (Keyboard / Mouse / Input)</option>
+            <option value="STORAGE">STORAGE (Flash Drive / SSD)</option>
+            <option value="NETWORK">NETWORK (Ethernet / NDIS)</option>
+            <option value="OTHER">OTHER</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Description / Device Name</label>
+          <input type="text" id="edit_desc" class="form-control" placeholder="Device description">
+        </div>
+        <div class="form-group">
+          <label>Manufacturer</label>
+          <input type="text" id="edit_mfg" class="form-control" placeholder="Manufacturer name">
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" onclick="closeEditModal()">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save Changes</button>
         </div>
       </form>
     </div>
@@ -337,15 +380,62 @@
       } catch (e) {}
     }
 
+    let currentEditingDevice = null;
+
+    function openEditModal(d) {
+      currentEditingDevice = d;
+      document.getElementById("edit_dev_id").value = d.id;
+      document.getElementById("edit_hw_info").innerText = `VID: ${d.vendor_id} | PID: ${d.product_id} | S/N: ${d.serial_number}`;
+      document.getElementById("edit_type").value = d.device_type || "OTHER";
+      document.getElementById("edit_desc").value = d.description || "";
+      document.getElementById("edit_mfg").value = d.manufacturer || "";
+      document.getElementById("editDeviceModal").classList.add("active");
+    }
+
+    function closeEditModal() {
+      document.getElementById("editDeviceModal").classList.remove("active");
+      currentEditingDevice = null;
+    }
+
+    async function handleEditDevice(e) {
+      e.preventDefault();
+      const devId = document.getElementById("edit_dev_id").value;
+      const payload = {
+        device_type: document.getElementById("edit_type").value,
+        description: document.getElementById("edit_desc").value.trim(),
+        manufacturer: document.getElementById("edit_mfg").value.trim()
+      };
+
+      try {
+        const res = await fetch(`/api/devices/${devId}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        if (res.ok) {
+          showToast(`Device #${devId} updated successfully!`);
+          closeEditModal();
+          loadAllowlist();
+        } else {
+          showToast("Failed to update device", true);
+        }
+      } catch (ex) {
+        showToast("Error: " + ex.message, true);
+      }
+    }
+
     async function loadAllowlist() {
       try {
-        const res = await fetch("/api/devices");
+        const searchInput = document.getElementById("allowlist-search");
+        const query = searchInput ? searchInput.value.trim() : "";
+        const url = query ? `/api/devices?search=${encodeURIComponent(query)}` : "/api/devices";
+        const res = await fetch(url);
         if (!res.ok) return;
         const devices = await res.json();
         const tbody = document.getElementById("allowlist-tbody");
         
         if (devices.length === 0) {
-          tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; color: var(--text-muted);">No devices in master allowlist. Add devices manually or approve pending requests.</td></tr>`;
+          tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; color: var(--text-muted);">No devices found in master allowlist.</td></tr>`;
           return;
         }
 
@@ -359,7 +449,10 @@
             <td>${d.description || d.manufacturer || "N/A"}</td>
             <td>${d.created_at}</td>
             <td>
-              <button class="btn btn-danger btn-sm" onclick="revokeDevice(${d.id}, '${d.vendor_id}', '${d.product_id}')">Revoke</button>
+              <div style="display: flex; gap: 6px;">
+                <button class="btn btn-secondary btn-sm" onclick='openEditModal(${JSON.stringify(d).replace(/'/g, "&apos;")})'>Edit</button>
+                <button class="btn btn-danger btn-sm" onclick="revokeDevice(${d.id}, '${d.vendor_id}', '${d.product_id}')">Revoke</button>
+              </div>
             </td>
           </tr>
         `).join("");

@@ -78,17 +78,43 @@ class TestUSBIPSServer(unittest.TestCase):
         devices = get_res.json()
         found = next((d for d in devices if d["vendor_id"] == "046D" and d["product_id"] == "C077"), None)
         self.assertIsNotNone(found)
+        dev_id = found["id"]
 
-        # Check access via check-or-request -> Should return ALLOW immediately
+        # Task 9: GET /api/devices/{id}
+        single_res = self.client.get(f"/api/devices/{dev_id}")
+        self.assertEqual(single_res.status_code, 200)
+        self.assertEqual(single_res.json()["vendor_id"], "046D")
+
+        # Task 9: PUT /api/devices/{id} update device description and manufacturer
+        update_res = self.client.put(f"/api/devices/{dev_id}", json={
+            "description": "Logitech Performance Gaming Mouse",
+            "manufacturer": "Logitech International"
+        })
+        self.assertEqual(update_res.status_code, 200)
+
+        # Verify update applied
+        verify_res = self.client.get(f"/api/devices/{dev_id}")
+        self.assertEqual(verify_res.json()["description"], "Logitech Performance Gaming Mouse")
+
+        # Task 9: Search filtering
+        search_res = self.client.get("/api/devices?search=Gaming")
+        self.assertEqual(search_res.status_code, 200)
+        self.assertTrue(any(d["id"] == dev_id for d in search_res.json()))
+
+        # Task 9: POST /api/device/check & /api/devices/check
         check_req = {
             "client_id": "test-machine-guid-001",
             "vendor_id": "046D",
             "product_id": "C077",
             "serial_number": "SN-LOGI-MOUSE-01"
         }
-        chk_res = self.client.post("/api/devices/check-or-request", json=check_req)
-        self.assertEqual(chk_res.status_code, 200)
-        self.assertEqual(chk_res.json()["decision"], "ALLOW")
+        chk_res1 = self.client.post("/api/device/check", json=check_req)
+        self.assertEqual(chk_res1.status_code, 200)
+        self.assertEqual(chk_res1.json()["decision"], "ALLOW")
+
+        chk_res2 = self.client.post("/api/devices/check", json=check_req)
+        self.assertEqual(chk_res2.status_code, 200)
+        self.assertEqual(chk_res2.json()["decision"], "ALLOW")
 
     def test_04_unknown_device_server_approval_flow(self):
         # 1. Unknown device plugs into client -> checks server

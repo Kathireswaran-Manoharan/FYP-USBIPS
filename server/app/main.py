@@ -50,3 +50,7 @@ async def serve_dashboard(request: Request):
 @app.get("/health", tags=["Health"])
 async def health_check():
     return {"status": "healthy", "service": "USBIPS Central Management Server"}
+
+@app.post("/api/device/check", tags=["Devices & Master Allowlist"])
+async def check_device_alias(data: devices.DeviceCheckRequest):
+    return devices.check_or_request_device(data)

@@ -34,6 +34,12 @@ class AllowlistDeviceCreate(BaseModel):
     description: Optional[str] = ""
     manufacturer: Optional[str] = ""
 
+class AllowlistDeviceUpdate(BaseModel):
+    device_type: Optional[str] = None
+    description: Optional[str] = None
+    manufacturer: Optional[str] = None
+    status: Optional[str] = None
+
 class AllowlistDeviceResponse(BaseModel):
     id: int
     vendor_id: str
