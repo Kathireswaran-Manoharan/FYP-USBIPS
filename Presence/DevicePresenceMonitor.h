@@ -42,13 +42,13 @@ public:
         const std::wstring& deviceId
     );
 
-private:
-
-    static void MonitorLoop();
-
     static bool IsDevicePresent(
         const std::wstring& deviceId
     );
+
+private:
+
+    static void MonitorLoop();
 
 private:
 

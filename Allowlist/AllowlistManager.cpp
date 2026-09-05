@@ -123,6 +123,8 @@ bool AllowlistManager::CreateTables()
 bool AllowlistManager::IsAllowed(
     const USBDevice& device)
 {
+    std::lock_guard<std::mutex> lock(m_mutex);
+
     if (db == nullptr)
     {
         return false;
@@ -199,6 +201,8 @@ bool AllowlistManager::IsAllowed(
 bool AllowlistManager::AddDevice(
     const USBDevice& device)
 {
+    std::lock_guard<std::mutex> lock(m_mutex);
+
     if (db == nullptr)
     {
         return false;
@@ -305,6 +309,8 @@ bool AllowlistManager::AddDevice(
 bool AllowlistManager::RemoveDevice(
     const USBDevice& device)
 {
+    std::lock_guard<std::mutex> lock(m_mutex);
+
     if (db == nullptr)
     {
         return false;
@@ -376,6 +382,7 @@ bool AllowlistManager::RemoveDevice(
 std::vector<AllowedDevice>
 AllowlistManager::GetAllDevices()
 {
+    std::lock_guard<std::mutex> lock(m_mutex);
     std::vector<AllowedDevice> devices;
 
     if (db == nullptr)
@@ -461,6 +468,93 @@ AllowlistManager::GetAllDevices()
     sqlite3_finalize(statement);
 
     return devices;
+}
+
+
+bool AllowlistManager::AddAllowedDevice(const AllowedDevice& device)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+    if (db == nullptr)
+    {
+        return false;
+    }
+
+    const wchar_t* sql =
+        L"INSERT OR REPLACE INTO allowed_devices "
+        L"(vendor_id, product_id, serial_number, device_type, description, manufacturer) "
+        L"VALUES (?, ?, ?, ?, ?, ?);";
+
+    sqlite3_stmt* statement = nullptr;
+    if (sqlite3_prepare16_v2(db, sql, -1, &statement, nullptr) != SQLITE_OK)
+    {
+        return false;
+    }
+
+    sqlite3_bind_text16(statement, 1, device.vendorId.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text16(statement, 2, device.productId.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text16(statement, 3, device.serialNumber.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text16(statement, 4, device.deviceType.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text16(statement, 5, device.description.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text16(statement, 6, device.manufacturer.c_str(), -1, SQLITE_TRANSIENT);
+
+    int result = sqlite3_step(statement);
+    sqlite3_finalize(statement);
+    return (result == SQLITE_DONE);
+}
+
+
+bool AllowlistManager::SyncWithRemote(const std::vector<AllowedDevice>& remoteDevices)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+    if (db == nullptr)
+    {
+        return false;
+    }
+
+    char* err = nullptr;
+    if (sqlite3_exec(db, "BEGIN TRANSACTION;", nullptr, nullptr, &err) != SQLITE_OK)
+    {
+        if (err) sqlite3_free(err);
+        return false;
+    }
+
+    if (sqlite3_exec(db, "DELETE FROM allowed_devices;", nullptr, nullptr, &err) != SQLITE_OK)
+    {
+        if (err) sqlite3_free(err);
+        sqlite3_exec(db, "ROLLBACK;", nullptr, nullptr, nullptr);
+        return false;
+    }
+
+    const wchar_t* insertSql =
+        L"INSERT OR REPLACE INTO allowed_devices "
+        L"(vendor_id, product_id, serial_number, device_type, description, manufacturer) "
+        L"VALUES (?, ?, ?, ?, ?, ?);";
+
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare16_v2(db, insertSql, -1, &stmt, nullptr) != SQLITE_OK)
+    {
+        sqlite3_exec(db, "ROLLBACK;", nullptr, nullptr, nullptr);
+        return false;
+    }
+
+    for (const auto& dev : remoteDevices)
+    {
+        sqlite3_bind_text16(stmt, 1, dev.vendorId.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text16(stmt, 2, dev.productId.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text16(stmt, 3, dev.serialNumber.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text16(stmt, 4, dev.deviceType.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text16(stmt, 5, dev.description.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text16(stmt, 6, dev.manufacturer.c_str(), -1, SQLITE_TRANSIENT);
+
+        sqlite3_step(stmt);
+        sqlite3_reset(stmt);
+    }
+
+    sqlite3_finalize(stmt);
+    sqlite3_exec(db, "COMMIT;", nullptr, nullptr, nullptr);
+    return true;
 }
 
 

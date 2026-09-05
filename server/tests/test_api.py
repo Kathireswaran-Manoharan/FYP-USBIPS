@@ -140,9 +140,19 @@ class TestUSBIPSServer(unittest.TestCase):
         pending_list = pending_res.json()
         self.assertTrue(any(p["request_id"] == req_id for p in pending_list))
 
+        # Task 10: Verify GET /api/requests/{request_id} polling
+        req_poll = self.client.get(f"/api/requests/{req_id}")
+        self.assertEqual(req_poll.status_code, 200)
+        self.assertEqual(req_poll.json()["status"], "PENDING")
+
         # 3. Administrator approves request in Management UI
         app_res = self.client.post(f"/api/requests/{req_id}/approve")
         self.assertEqual(app_res.status_code, 200)
+
+        # Task 10: Verify GET /api/requests/{request_id} returns APPROVED
+        req_poll_after = self.client.get(f"/api/requests/{req_id}")
+        self.assertEqual(req_poll_after.status_code, 200)
+        self.assertEqual(req_poll_after.json()["status"], "APPROVED")
 
         # 4. Client polls check-or-request again -> Now receives ALLOW!
         chk_again = self.client.post("/api/devices/check-or-request", json=unknown_dev)
