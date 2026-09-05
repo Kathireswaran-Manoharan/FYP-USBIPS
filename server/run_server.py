@@ -7,10 +7,14 @@ repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if repo_root not in sys.path:
     sys.path.insert(0, repo_root)
 
+from server.app.database.db import init_db
+
 if __name__ == "__main__":
     print("==================================================")
     print("      USBIPS CENTRAL MANAGEMENT SERVER (PHASE 1)")
     print("==================================================")
+    print("Initializing SQLite database tables...")
+    init_db()
     print("Starting server at: http://127.0.0.1:8000")
     print("Access the Web Dashboard at: http://127.0.0.1:8000")
     print("Swagger API Docs available at: http://127.0.0.1:8000/docs")

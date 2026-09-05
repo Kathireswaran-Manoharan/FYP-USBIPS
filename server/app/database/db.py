@@ -35,6 +35,8 @@ def get_db():
         conn.close()
 
 def init_db():
+    path = get_db_path()
+    _initialized_paths.add(path)
     conn = get_connection()
     try:
         cursor = conn.cursor()

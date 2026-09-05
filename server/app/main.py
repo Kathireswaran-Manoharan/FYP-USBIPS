@@ -11,6 +11,9 @@ from .api import clients, devices, requests, events
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "templates")
 
+# Ensure database schema is created immediately on module import
+init_db()
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Initialize SQLite database and tables

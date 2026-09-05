@@ -1,4 +1,6 @@
 #include "SyncManager.h"
+#include "../Enforcement/EnforcementManager.h"
+#include "../Presence/DevicePresenceMonitor.h"
 
 #include <iostream>
 
@@ -10,7 +12,7 @@ SyncManager& SyncManager::Instance()
 
 SyncManager::SyncManager()
     : m_allowlist(nullptr)
-    , m_intervalSeconds(15)
+    , m_intervalSeconds(5)
     , m_running(false)
     , m_serverConnected(false)
     , m_clientRegistered(false)
@@ -128,6 +130,44 @@ bool SyncManager::PerformSyncCycle()
             if (RestClient::Instance().FetchMasterAllowlist(remoteDevices))
             {
                 m_allowlist->SyncWithRemote(remoteDevices);
+
+                // Check all currently active/connected devices to enforce real-time revocation
+                auto tracked = DevicePresenceMonitor::GetTrackedDevices();
+                for (const auto& item : tracked)
+                {
+                    if (item.state == DeviceTrackingState::RELEASED)
+                    {
+                        if (!m_allowlist->IsAllowed(item.device))
+                        {
+                            std::wcout << L"\n=======================================================\n";
+                            std::wcout << L"[SECURITY ALERT] Device " << item.device.vendorId
+                                       << L":" << item.device.productId
+                                       << L" (Serial: " << item.device.serialNumber
+                                       << L") was REVOKED by Central Server!\n";
+                            std::wcout << L"[SECURITY] Disabling physical peripheral internally via CM_Disable_DevNode...\n";
+
+                            bool disabled = EnforcementManager::QuarantineDevice(item.device);
+                            if (disabled)
+                            {
+                                DevicePresenceMonitor::SetDeviceState(item.deviceId, DeviceTrackingState::QUARANTINED);
+                                std::wcout << L"[OK] Revocation enforced. Peripheral is now DISABLED internally.\n";
+                                std::wcout << L"=======================================================\n";
+
+                                EventLogger::Instance().LogEvent(
+                                    SecurityEventType::DEVICE_BLOCKED,
+                                    item.device,
+                                    L"BLOCK",
+                                    L"Central server revoked authorization; physical peripheral disabled in real-time"
+                                );
+                            }
+                            else
+                            {
+                                std::wcerr << L"[ERROR] Failed to disable revoked device internally.\n";
+                                std::wcout << L"=======================================================\n";
+                            }
+                        }
+                    }
+                }
             }
         }
 

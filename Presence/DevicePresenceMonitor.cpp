@@ -166,6 +166,29 @@ void DevicePresenceMonitor::UntrackDevice(
 }
 
 
+void DevicePresenceMonitor::SetDeviceState(
+    const std::wstring& deviceId,
+    DeviceTrackingState state)
+{
+    std::lock_guard<std::mutex> lock(g_mutex);
+    for (auto& d : g_trackedDevices)
+    {
+        if (d.deviceId == deviceId)
+        {
+            d.state = state;
+            return;
+        }
+    }
+}
+
+
+std::vector<TrackedDevice> DevicePresenceMonitor::GetTrackedDevices()
+{
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return g_trackedDevices;
+}
+
+
 // ============================================================
 // Check presence
 // ============================================================

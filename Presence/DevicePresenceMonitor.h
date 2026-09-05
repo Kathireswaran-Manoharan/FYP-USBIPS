@@ -10,11 +10,18 @@
 #include <atomic>
 #include "../Models/USBDevice.h"
 
+enum class DeviceTrackingState
+{
+    QUARANTINED,
+    RELEASED
+};
+
 struct TrackedDevice
 {
     std::wstring deviceId;
     std::wstring deviceInterfacePath;
     USBDevice device;
+    DeviceTrackingState state = DeviceTrackingState::QUARANTINED;
 
     std::chrono::steady_clock::time_point trackingStart;
     int missingChecks = 0;
@@ -38,6 +45,11 @@ public:
         const std::wstring& deviceInterfacePath
     );
 
+    static void SetDeviceState(
+        const std::wstring& deviceId,
+        DeviceTrackingState state
+    );
+
     static void UntrackDevice(
         const std::wstring& deviceId
     );
@@ -45,6 +57,8 @@ public:
     static bool IsDevicePresent(
         const std::wstring& deviceId
     );
+
+    static std::vector<TrackedDevice> GetTrackedDevices();
 
 private:
 

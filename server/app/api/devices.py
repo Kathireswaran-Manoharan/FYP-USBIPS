@@ -165,13 +165,48 @@ def update_device(device_id: int, update: AllowlistDeviceUpdate):
 @router.delete("/{device_id}", response_model=dict)
 def revoke_device_from_allowlist(device_id: int):
     """
-    Task 9: DELETE /api/devices/{id} - Revoke/remove a device.
+    Task 9 & 10: DELETE /api/devices/{id} - Revoke/remove a device.
+    Purges device from master_allowlist and marks all associated requests as REVOKED so clients enforce block.
     """
+    now = utc_now_iso()
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM master_allowlist WHERE id = ?;", (device_id,))
-        if cursor.rowcount == 0:
+        cursor.execute("SELECT vendor_id, product_id, serial_number, device_type, description FROM master_allowlist WHERE id = ?;", (device_id,))
+        dev = cursor.fetchone()
+        if not dev:
             raise HTTPException(status_code=404, detail="Device not found in master allowlist")
+
+        # 1. Delete from master_allowlist
+        cursor.execute("DELETE FROM master_allowlist WHERE id = ?;", (device_id,))
+
+        # 2. Mark any pending/approved requests for this hardware as REVOKED, or insert a REVOKED record
+        cursor.execute("""
+            UPDATE pending_requests
+            SET status = 'REVOKED', decided_at = ?, decision_by = 'Administrator'
+            WHERE vendor_id = ? AND product_id = ? AND serial_number = ?;
+        """, (now, dev["vendor_id"], dev["product_id"], dev["serial_number"]))
+        if cursor.rowcount == 0:
+            cursor.execute("""
+                INSERT INTO pending_requests (
+                    request_id, client_id, vendor_id, product_id, serial_number,
+                    device_type, description, status, requested_at, decided_at, decision_by
+                ) VALUES (?, 'ALL_CLIENTS', ?, ?, ?, ?, ?, 'REVOKED', ?, ?, 'Administrator');
+            """, (
+                str(uuid.uuid4()), dev["vendor_id"], dev["product_id"], dev["serial_number"],
+                dev["device_type"] or "OTHER", dev["description"] or "", now, now
+            ))
+
+        # 3. Log revocation event in central telemetry
+        event_id = str(uuid.uuid4())
+        cursor.execute("""
+            INSERT INTO server_events (
+                event_id, client_id, timestamp, event_type, vendor_id, product_id,
+                serial_number, device_id, device_type, description, decision, reason, received_at
+            ) VALUES (?, 'CENTRAL_SERVER', ?, 'DEVICE_BLOCKED', ?, ?, ?, '', ?, ?, 'BLOCK', 'Authorization revoked by administrator', ?);
+        """, (
+            event_id, now, dev["vendor_id"], dev["product_id"], dev["serial_number"],
+            dev["device_type"] or "OTHER", dev["description"] or "", now
+        ))
             
     return {"status": "success", "message": f"Device ID {device_id} revoked from master allowlist"}
 
@@ -179,7 +214,7 @@ def revoke_device_from_allowlist(device_id: int):
 @router.post("/check-or-request", response_model=DeviceCheckResponse)
 def check_or_request_device(data: DeviceCheckRequest):
     """
-    Task 9: POST /api/devices/check - Allow the client to query central policy when required.
+    Task 9 & 10: POST /api/devices/check - Allow the client to query central policy when required.
     """
     vid = data.vendor_id.upper()
     pid = data.product_id.upper()
@@ -215,18 +250,20 @@ def check_or_request_device(data: DeviceCheckRequest):
             req_status = existing_req["status"]
 
             if req_status == "APPROVED":
-                return DeviceCheckResponse(
-                    decision="ALLOW",
-                    request_id=req_id,
-                    request_status="APPROVED",
-                    message="Authorization approved by central administrator"
-                )
-            elif req_status == "DECLINED":
+                # Master allowlist check failed, so device was revoked!
+                cursor.execute("UPDATE pending_requests SET status = 'REVOKED' WHERE request_id = ?;", (req_id,))
                 return DeviceCheckResponse(
                     decision="BLOCK",
                     request_id=req_id,
-                    request_status="DECLINED",
-                    message="Authorization declined by central administrator"
+                    request_status="REVOKED",
+                    message="Authorization was revoked by central administrator"
+                )
+            elif req_status in ("DECLINED", "REVOKED"):
+                return DeviceCheckResponse(
+                    decision="BLOCK",
+                    request_id=req_id,
+                    request_status=req_status,
+                    message=f"Authorization {req_status.lower()} by central administrator"
                 )
             else:
                 return DeviceCheckResponse(

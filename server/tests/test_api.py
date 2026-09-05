@@ -209,6 +209,17 @@ class TestUSBIPSServer(unittest.TestCase):
         devs_after = self.client.get("/api/devices").json()
         self.assertFalse(any(d["id"] == dev_id for d in devs_after))
 
+        # Verify check-or-request returns BLOCK for revoked device
+        chk = self.client.post("/api/devices/check-or-request", json={
+            "client_id": "test-machine-guid-001",
+            "vendor_id": "1111",
+            "product_id": "2222",
+            "serial_number": "REVOKE-TEST-01"
+        })
+        self.assertEqual(chk.status_code, 200)
+        self.assertEqual(chk.json()["decision"], "BLOCK")
+        self.assertEqual(chk.json()["request_status"], "REVOKED")
+
     def test_07_batch_event_ingestion_and_stats(self):
         batch = {
             "events": [

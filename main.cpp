@@ -657,8 +657,9 @@ LRESULT CALLBACK WindowProc(
 
                     if (released)
                     {
-                        DevicePresenceMonitor::UntrackDevice(
-                            device.deviceId
+                        DevicePresenceMonitor::SetDeviceState(
+                            device.deviceId,
+                            DeviceTrackingState::RELEASED
                         );
 
                         std::wcout
@@ -815,7 +816,7 @@ int main()
     // --------------------------------------------------------
     // Start Background Sync Engine (Task 10 & 11)
     // --------------------------------------------------------
-    SyncManager::Instance().Start(&g_allowlist, L"127.0.0.1", 8000, 15);
+    SyncManager::Instance().Start(&g_allowlist, L"127.0.0.1", 8000, 5);
 
 
     // --------------------------------------------------------
