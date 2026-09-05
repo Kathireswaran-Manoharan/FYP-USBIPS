@@ -1,0 +1,86 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
+      <Extensions>cpp;c;cc;cxx;c++;cppm;ixx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+    </Filter>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+      <Extensions>h;hh;hpp;hxx;h++;hm;inl;inc;ipp;xsd</Extensions>
+    </Filter>
+    <Filter Include="Header Files\Models">
+      <UniqueIdentifier>{0cec1812-6a94-42f3-9324-60df6e8a281a}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\Extractor">
+      <UniqueIdentifier>{6589eaf6-9486-49c5-a004-0596b2a7b94c}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\Extractor">
+      <UniqueIdentifier>{2b738219-a174-4c85-a0bc-afa0b0701274}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\Classifier">
+      <UniqueIdentifier>{0b0524ea-c91a-4453-9903-287aa6d329a9}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\Classifier">
+      <UniqueIdentifier>{438b834e-dc3e-4c7f-b356-7b7906f46c2d}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\Allowlist">
+      <UniqueIdentifier>{42d99d89-dcea-41ea-a39e-2483dbbebfae}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\Allowlist">
+      <UniqueIdentifier>{440c8350-d34f-4120-9918-5c5bde667ac4}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="main.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Classifier\DeviceClassifier.cpp">
+      <Filter>Source Files\Classifier</Filter>
+    </ClCompile>
+    <ClCompile Include="Extractor\DeviceInfoExtractor.cpp">
+      <Filter>Source Files\Extractor</Filter>
+    </ClCompile>
+    <ClCompile Include="ThirdParty\SQLite\sqlite3.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Allowlist\AllowlistManager.cpp">
+      <Filter>Source Files\Allowlist</Filter>
+    </ClCompile>
+    <ClCompile Include="AccessControl\AccessController.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Enforcement\EnforcementManager.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Presence\DevicePresenceMonitor.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="Classifier\DeviceClassifier.h">
+      <Filter>Header Files\Classifier</Filter>
+    </ClInclude>
+    <ClInclude Include="Extractor\DeviceInfoExtractor.h">
+      <Filter>Header Files\Extractor</Filter>
+    </ClInclude>
+    <ClInclude Include="Models\USBDevice.h">
+      <Filter>Header Files\Models</Filter>
+    </ClInclude>
+    <ClInclude Include="ThirdParty\SQLite\sqlite3.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Allowlist\AllowlistManager.h">
+      <Filter>Header Files\Allowlist</Filter>
+    </ClInclude>
+    <ClInclude Include="AccessControl\AccessController.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Enforcement\EnforcementManager.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Presence\DevicePresenceMonitor.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
+</Project>

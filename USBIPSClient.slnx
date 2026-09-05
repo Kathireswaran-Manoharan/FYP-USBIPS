@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="USBIPSClient.vcxproj" Id="14eedbb3-76c2-42fc-8839-9b14db20ab48" />
+</Solution>

@@ -1,0 +1,42 @@
+# Visual Studio user and workspace files
+.vs/
+*.user
+*.suo
+*.VC.db
+*.VC.opendb
+
+# Build output
+[Bb]uild/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+Win32/
+ARM/
+ARM64/
+*.obj
+*.pdb
+*.ilk
+*.exe
+*.dll
+*.lib
+*.exp
+*.idb
+*.ipdb
+*.iobj
+*.tlog/
+
+# Generated project files
+*.sln.cache
+*.ncb
+*.opensdf
+*.sdf
+
+# Local runtime data
+usbips.db
+usbips.db-*
+
+# Operating-system files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
