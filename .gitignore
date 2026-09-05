@@ -40,3 +40,7 @@ usbips.db-*
 Thumbs.db
 ehthumbs.db
 Desktop.ini
+
+#vscode
+tasks.json
+c_cpp_properties.json

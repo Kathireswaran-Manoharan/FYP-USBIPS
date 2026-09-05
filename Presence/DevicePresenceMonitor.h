@@ -8,16 +8,15 @@
 #include <mutex>
 #include <vector>
 #include <atomic>
-#include <chrono>
+#include "../Models/USBDevice.h"
 
 struct TrackedDevice
 {
     std::wstring deviceId;
     std::wstring deviceInterfacePath;
+    USBDevice device;
 
-    std::chrono::steady_clock::time_point
-        trackingStart;
-
+    std::chrono::steady_clock::time_point trackingStart;
     int missingChecks = 0;
 };
 
@@ -29,6 +28,10 @@ public:
     static bool Start();
 
     static void Stop();
+
+    static void TrackDevice(
+        const USBDevice& device
+    );
 
     static void TrackDevice(
         const std::wstring& deviceId,

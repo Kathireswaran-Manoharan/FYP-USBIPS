@@ -1,4 +1,5 @@
 #include "DevicePresenceMonitor.h"
+#include "../Logging/EventLogger.h"
 
 #include <iostream>
 
@@ -65,6 +66,38 @@ void DevicePresenceMonitor::Stop()
 // ============================================================
 // Track
 // ============================================================
+
+void DevicePresenceMonitor::TrackDevice(
+    const USBDevice& device)
+{
+    if (device.deviceId.empty())
+        return;
+
+    std::lock_guard<std::mutex> lock(
+        g_mutex
+    );
+
+    for (const auto& d : g_trackedDevices)
+    {
+        if (d.deviceId == device.deviceId)
+            return;
+    }
+
+    TrackedDevice tracked;
+    tracked.deviceId = device.deviceId;
+    tracked.deviceInterfacePath = device.deviceInterfacePath;
+    tracked.device = device;
+    tracked.trackingStart = std::chrono::steady_clock::now();
+    tracked.missingChecks = 0;
+
+    g_trackedDevices.push_back(tracked);
+
+    std::wcout
+        << L"[PRESENCE] Tracking quarantined device: "
+        << device.deviceId
+        << L"\n";
+}
+
 
 void DevicePresenceMonitor::TrackDevice(
     const std::wstring& deviceId,
@@ -217,6 +250,26 @@ void DevicePresenceMonitor::MonitorLoop()
                         << L"Device Interface: "
                         << it->deviceInterfacePath
                         << L"\n";
+
+                    if (!it->device.deviceId.empty())
+                    {
+                        EventLogger::Instance().LogEvent(
+                            SecurityEventType::DEVICE_REMOVED,
+                            it->device,
+                            L"-",
+                            L"Physical disconnect of quarantined device detected by presence monitor"
+                        );
+                    }
+                    else
+                    {
+                        EventLogger::Instance().LogSimpleEvent(
+                            SecurityEventType::DEVICE_REMOVED,
+                            it->deviceId,
+                            it->deviceInterfacePath,
+                            L"-",
+                            L"Physical disconnect of quarantined device detected by presence monitor"
+                        );
+                    }
 
                     it =
                         g_trackedDevices.erase(

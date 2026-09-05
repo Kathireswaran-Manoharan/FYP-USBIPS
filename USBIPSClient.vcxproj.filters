@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
     <Filter Include="Source Files">
@@ -30,6 +30,12 @@
     <Filter Include="Source Files\Allowlist">
       <UniqueIdentifier>{440c8350-d34f-4120-9918-5c5bde667ac4}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Header Files\Logging">
+      <UniqueIdentifier>{7a5b3c10-98d4-4e32-b671-331298cde0a1}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\Logging">
+      <UniqueIdentifier>{8c6d4e21-09e5-4f43-a782-442309def1b2}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp">
@@ -53,6 +59,9 @@
     <ClCompile Include="Enforcement\EnforcementManager.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="Logging\EventLogger.cpp">
+      <Filter>Source Files\Logging</Filter>
+    </ClCompile>
     <ClCompile Include="Presence\DevicePresenceMonitor.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -63,6 +72,12 @@
     </ClInclude>
     <ClInclude Include="Extractor\DeviceInfoExtractor.h">
       <Filter>Header Files\Extractor</Filter>
+    </ClInclude>
+    <ClInclude Include="Logging\EventLogger.h">
+      <Filter>Header Files\Logging</Filter>
+    </ClInclude>
+    <ClInclude Include="Models\SecurityEvent.h">
+      <Filter>Header Files\Models</Filter>
     </ClInclude>
     <ClInclude Include="Models\USBDevice.h">
       <Filter>Header Files\Models</Filter>

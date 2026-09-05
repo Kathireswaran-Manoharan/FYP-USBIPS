@@ -14,6 +14,7 @@
 #include "AccessControl/AccessController.h"
 #include "Enforcement/EnforcementManager.h"
 #include "Presence/DevicePresenceMonitor.h"
+#include "Logging/EventLogger.h"
 
 HDEVNOTIFY g_hDeviceNotify = nullptr;
 AllowlistManager g_allowlist;
@@ -303,8 +304,23 @@ LRESULT CALLBACK WindowProc(
                     std::wcerr
                         << L"[ERROR] Failed to extract USB device information.\n";
 
+                    EventLogger::Instance().LogSimpleEvent(
+                        SecurityEventType::DEVICE_CONNECTED,
+                        L"",
+                        devicePath,
+                        L"BLOCK",
+                        L"Failed to extract USB device information"
+                    );
+
                     return 0;
                 }
+
+                EventLogger::Instance().LogEvent(
+                    SecurityEventType::DEVICE_CONNECTED,
+                    device,
+                    L"-",
+                    L"USB device connected"
+                );
 
 
                 /*
@@ -329,12 +345,25 @@ LRESULT CALLBACK WindowProc(
                     CancelExpectedRemoval(
                         device.deviceInterfacePath
                     );
+
+                    EventLogger::Instance().LogEvent(
+                        SecurityEventType::DEVICE_BLOCKED,
+                        device,
+                        L"BLOCK",
+                        L"Initial quarantine failed; device locked by security policy"
+                    );
                 }
                 else
                 {
                     DevicePresenceMonitor::TrackDevice(
-                        device.deviceId,
-                        device.deviceInterfacePath
+                        device
+                    );
+
+                    EventLogger::Instance().LogEvent(
+                        SecurityEventType::DEVICE_QUARANTINED,
+                        device,
+                        L"-",
+                        L"Device placed in pre-decision zero-trust quarantine"
                     );
                 }
 
@@ -363,6 +392,13 @@ LRESULT CALLBACK WindowProc(
 
                     std::wcerr
                         << L"[SECURITY] Device will remain quarantined.\n";
+
+                    EventLogger::Instance().LogEvent(
+                        SecurityEventType::DEVICE_BLOCKED,
+                        device,
+                        L"BLOCK",
+                        L"Device classification failed; kept in quarantine"
+                    );
 
                     return 0;
                 }
@@ -402,6 +438,13 @@ LRESULT CALLBACK WindowProc(
                 {
                     std::wcout
                         << L"Device is already allowlisted.\n";
+
+                    EventLogger::Instance().LogEvent(
+                        SecurityEventType::ALLOWLIST_MATCH,
+                        device,
+                        L"ALLOW",
+                        L"Device matches local allowlist"
+                    );
                 }
 
 
@@ -413,6 +456,13 @@ LRESULT CALLBACK WindowProc(
                 {
                     std::wcout
                         << L"Device is not in the allowlist.\n";
+
+                    EventLogger::Instance().LogEvent(
+                        SecurityEventType::UNKNOWN_DEVICE,
+                        device,
+                        L"ASK",
+                        L"Device not found in allowlist; awaiting administrator decision"
+                    );
 
                     std::wcout
                         << L"Add this device to the allowlist? (Y/N): ";
@@ -431,6 +481,13 @@ LRESULT CALLBACK WindowProc(
 
                             std::wcout
                                 << L"Device approved.\n";
+
+                            EventLogger::Instance().LogEvent(
+                                SecurityEventType::USER_APPROVED,
+                                device,
+                                L"ALLOW",
+                                L"Administrator approved device enrollment into allowlist"
+                            );
                         }
                         else
                         {
@@ -440,12 +497,26 @@ LRESULT CALLBACK WindowProc(
                             std::wcerr
                                 << L"Failed to add device "
                                 << L"to allowlist.\n";
+
+                            EventLogger::Instance().LogEvent(
+                                SecurityEventType::DEVICE_BLOCKED,
+                                device,
+                                L"BLOCK",
+                                L"Database insertion failure during enrollment"
+                            );
                         }
                     }
                     else
                     {
                         decision =
                             AccessDecision::BLOCK;
+
+                        EventLogger::Instance().LogEvent(
+                            SecurityEventType::USER_REJECTED,
+                            device,
+                            L"BLOCK",
+                            L"Administrator rejected device enrollment"
+                        );
                     }
                 }
 
@@ -495,6 +566,13 @@ LRESULT CALLBACK WindowProc(
                         std::wcout
                             << L"Enforcement Status : "
                             << L"DEVICE RELEASED\n";
+
+                        EventLogger::Instance().LogEvent(
+                            SecurityEventType::DEVICE_RELEASED,
+                            device,
+                            L"ALLOW",
+                            L"Device released from quarantine and operational"
+                        );
                     }
                     else
                     {
@@ -504,6 +582,13 @@ LRESULT CALLBACK WindowProc(
 
                         std::wcerr
                             << L"[SECURITY] Device remains quarantined.\n";
+
+                        EventLogger::Instance().LogEvent(
+                            SecurityEventType::DEVICE_BLOCKED,
+                            device,
+                            L"BLOCK",
+                            L"Device release failed; device remains quarantined"
+                        );
                     }
                 }
 
@@ -520,6 +605,13 @@ LRESULT CALLBACK WindowProc(
                     std::wcout
                         << L"Enforcement Status : "
                         << L"DEVICE REMAINS QUARANTINED\n";
+
+                    EventLogger::Instance().LogEvent(
+                        SecurityEventType::DEVICE_BLOCKED,
+                        device,
+                        L"BLOCK",
+                        L"Device access blocked by policy; remains disabled"
+                    );
                 }
             }
         }
@@ -567,6 +659,14 @@ LRESULT CALLBACK WindowProc(
                     << L"Device Interface: "
                     << devicePath
                     << L"\n";
+
+                EventLogger::Instance().LogSimpleEvent(
+                    SecurityEventType::DEVICE_REMOVED,
+                    L"",
+                    devicePath,
+                    L"-",
+                    L"USB device interface disconnected (OS notification)"
+                );
             }
         }
 
@@ -606,6 +706,12 @@ int main()
             << L"Failed to initialize allowlist database.\n";
 
         return 1;
+    }
+
+    if (!EventLogger::Instance().Initialize(L"usbips.db"))
+    {
+        std::wcerr
+            << L"[WARNING] Failed to initialize event logging database.\n";
     }
 
 
@@ -737,6 +843,7 @@ int main()
     }
 
     DevicePresenceMonitor::Stop();
+    EventLogger::Instance().Close();
 
     DestroyWindow(hwnd);
 
