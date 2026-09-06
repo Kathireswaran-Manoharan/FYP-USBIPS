@@ -144,7 +144,10 @@
     <ClCompile Include="Classifier\DeviceClassifier.cpp" />
     <ClCompile Include="Enforcement\EnforcementManager.cpp" />
     <ClCompile Include="Extractor\DeviceInfoExtractor.cpp" />
+    <ClCompile Include="Logging\EventLogger.cpp" />
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="Network\RestClient.cpp" />
+    <ClCompile Include="Network\SyncManager.cpp" />
     <ClCompile Include="Presence\DevicePresenceMonitor.cpp" />
     <ClCompile Include="ThirdParty\SQLite\sqlite3.c">
       <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">CompileAsC</CompileAs>
@@ -156,7 +159,11 @@
     <ClInclude Include="Classifier\DeviceClassifier.h" />
     <ClInclude Include="Enforcement\EnforcementManager.h" />
     <ClInclude Include="Extractor\DeviceInfoExtractor.h" />
+    <ClInclude Include="Logging\EventLogger.h" />
+    <ClInclude Include="Models\SecurityEvent.h" />
     <ClInclude Include="Models\USBDevice.h" />
+    <ClInclude Include="Network\RestClient.h" />
+    <ClInclude Include="Network\SyncManager.h" />
     <ClInclude Include="Presence\DevicePresenceMonitor.h" />
     <ClInclude Include="ThirdParty\SQLite\sqlite3.h" />
   </ItemGroup>

@@ -14,6 +14,9 @@
 #include "AccessControl/AccessController.h"
 #include "Enforcement/EnforcementManager.h"
 #include "Presence/DevicePresenceMonitor.h"
+#include "Logging/EventLogger.h"
+#include "Network/RestClient.h"
+#include "Network/SyncManager.h"
 
 HDEVNOTIFY g_hDeviceNotify = nullptr;
 AllowlistManager g_allowlist;
@@ -303,8 +306,23 @@ LRESULT CALLBACK WindowProc(
                     std::wcerr
                         << L"[ERROR] Failed to extract USB device information.\n";
 
+                    EventLogger::Instance().LogSimpleEvent(
+                        SecurityEventType::DEVICE_CONNECTED,
+                        L"",
+                        devicePath,
+                        L"BLOCK",
+                        L"Failed to extract USB device information"
+                    );
+
                     return 0;
                 }
+
+                EventLogger::Instance().LogEvent(
+                    SecurityEventType::DEVICE_CONNECTED,
+                    device,
+                    L"-",
+                    L"USB device connected"
+                );
 
 
                 /*
@@ -329,12 +347,25 @@ LRESULT CALLBACK WindowProc(
                     CancelExpectedRemoval(
                         device.deviceInterfacePath
                     );
+
+                    EventLogger::Instance().LogEvent(
+                        SecurityEventType::DEVICE_BLOCKED,
+                        device,
+                        L"BLOCK",
+                        L"Initial quarantine failed; device locked by security policy"
+                    );
                 }
                 else
                 {
                     DevicePresenceMonitor::TrackDevice(
-                        device.deviceId,
-                        device.deviceInterfacePath
+                        device
+                    );
+
+                    EventLogger::Instance().LogEvent(
+                        SecurityEventType::DEVICE_QUARANTINED,
+                        device,
+                        L"-",
+                        L"Device placed in pre-decision zero-trust quarantine"
                     );
                 }
 
@@ -363,6 +394,13 @@ LRESULT CALLBACK WindowProc(
 
                     std::wcerr
                         << L"[SECURITY] Device will remain quarantined.\n";
+
+                    EventLogger::Instance().LogEvent(
+                        SecurityEventType::DEVICE_BLOCKED,
+                        device,
+                        L"BLOCK",
+                        L"Device classification failed; kept in quarantine"
+                    );
 
                     return 0;
                 }
@@ -402,50 +440,181 @@ LRESULT CALLBACK WindowProc(
                 {
                     std::wcout
                         << L"Device is already allowlisted.\n";
+
+                    EventLogger::Instance().LogEvent(
+                        SecurityEventType::ALLOWLIST_MATCH,
+                        device,
+                        L"ALLOW",
+                        L"Device matches local allowlist"
+                    );
                 }
 
 
                 /*
                     STEP 7
-                    Unknown device.
+                    Unknown device - Central Server Authorization Workflow
                 */
                 else if (decision == AccessDecision::ASK)
                 {
                     std::wcout
-                        << L"Device is not in the allowlist.\n";
+                        << L"Device is not in the local allowlist.\n";
 
-                    std::wcout
-                        << L"Add this device to the allowlist? (Y/N): ";
+                    EventLogger::Instance().LogEvent(
+                        SecurityEventType::UNKNOWN_DEVICE,
+                        device,
+                        L"ASK",
+                        L"Device not found in local allowlist; requesting central server authorization"
+                    );
 
-                    wchar_t answer;
+                    std::wstring clientId = EventLogger::Instance().GetClientId();
+                    std::wcout << L"[SERVER] Querying Central Management Server...\n";
 
-                    std::wcin >> answer;
+                    DeviceCheckResult checkResult =
+                        RestClient::Instance().CheckOrRequestDevice(clientId, device);
 
-                    if (answer == L'Y' ||
-                        answer == L'y')
+                    if (!checkResult.success)
                     {
-                        if (g_allowlist.AddDevice(device))
-                        {
-                            decision =
-                                AccessDecision::ALLOW;
+                        // Central server is offline or unreachable -> Zero-Trust fallback
+                        std::wcerr
+                            << L"[OFFLINE] Central server unavailable (" << checkResult.message << L").\n"
+                            << L"[OFFLINE] Enforcing local zero-trust policy: DEVICE BLOCKED.\n";
 
-                            std::wcout
-                                << L"Device approved.\n";
-                        }
-                        else
-                        {
-                            decision =
-                                AccessDecision::BLOCK;
+                        decision = AccessDecision::BLOCK;
 
-                            std::wcerr
-                                << L"Failed to add device "
-                                << L"to allowlist.\n";
-                        }
+                        EventLogger::Instance().LogEvent(
+                            SecurityEventType::DEVICE_BLOCKED,
+                            device,
+                            L"BLOCK",
+                            L"Central server offline; unknown device blocked by local zero-trust policy"
+                        );
                     }
-                    else
+                    else if (checkResult.decision == L"ALLOW")
                     {
-                        decision =
-                            AccessDecision::BLOCK;
+                        // Server immediately returned ALLOW (device is in server master allowlist)
+                        std::wcout
+                            << L"[SERVER] Authorization granted by Central Server: "
+                            << checkResult.message << L"\n";
+
+                        g_allowlist.AddDevice(device);
+                        decision = AccessDecision::ALLOW;
+
+                        EventLogger::Instance().LogEvent(
+                            SecurityEventType::USER_APPROVED,
+                            device,
+                            L"ALLOW",
+                            L"Central server master allowlist match"
+                        );
+                    }
+                    else if (checkResult.decision == L"BLOCK")
+                    {
+                        std::wcout
+                            << L"[SERVER] Authorization DENIED by Central Server policy: "
+                            << checkResult.message << L"\n";
+
+                        decision = AccessDecision::BLOCK;
+
+                        EventLogger::Instance().LogEvent(
+                            SecurityEventType::DEVICE_BLOCKED,
+                            device,
+                            L"BLOCK",
+                            L"Central server policy denied authorization"
+                        );
+                    }
+                    else // decision == L"ASK", requestStatus == L"PENDING"
+                    {
+                        std::wstring reqId = checkResult.requestId;
+                        std::wcout << L"--------------------------------------------------\n";
+                        std::wcout << L"[SERVER] Authorization request submitted to Central Server.\n";
+                        std::wcout << L"[SERVER] Request ID : " << reqId << L"\n";
+                        std::wcout << L"[SERVER] Status     : PENDING ADMINISTRATOR DECISION\n";
+                        std::wcout << L"[SERVER] Dashboard  : http://" << RestClient::Instance().GetServerHost()
+                                   << L":" << RestClient::Instance().GetServerPort() << L"\n";
+                        std::wcout << L"[SECURITY] Peripheral remains quarantined in zero-trust state.\n";
+                        std::wcout << L"[SERVER] Waiting for administrator decision on Web Dashboard";
+
+                        const int maxPollSeconds = 120; // 2 minutes timeout
+                        const int pollIntervalMs = 2000; // poll every 2 seconds
+                        int elapsedSeconds = 0;
+                        bool decided = false;
+
+                        while (elapsedSeconds < maxPollSeconds)
+                        {
+                            // 1. Process any pending window messages so removal/arrival notifications aren't blocked
+                            MSG msg;
+                            while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE))
+                            {
+                                TranslateMessage(&msg);
+                                DispatchMessageW(&msg);
+                            }
+
+                            // 2. Check if device was physically disconnected while waiting
+                            if (!DevicePresenceMonitor::IsDevicePresent(device.deviceId))
+                            {
+                                std::wcout << L"\n[NOTICE] Device was physically disconnected while awaiting approval.\n";
+                                decision = AccessDecision::BLOCK;
+                                decided = true;
+                                break;
+                            }
+
+                            // 3. Poll server for request status
+                            DeviceCheckResult pollResult = RestClient::Instance().PollRequestStatus(reqId);
+                            if (pollResult.success)
+                            {
+                                if (pollResult.requestStatus == L"APPROVED")
+                                {
+                                    std::wcout << L"\n[SERVER] >>> AUTHORIZATION APPROVED BY ADMINISTRATOR! <<<\n";
+                                    std::wcout << L"[SERVER] Adding device to local allowlist cache.\n";
+
+                                    g_allowlist.AddDevice(device);
+                                    decision = AccessDecision::ALLOW;
+
+                                    EventLogger::Instance().LogEvent(
+                                        SecurityEventType::USER_APPROVED,
+                                        device,
+                                        L"ALLOW",
+                                        L"Administrator approved authorization request on Central Dashboard"
+                                    );
+
+                                    decided = true;
+                                    break;
+                                }
+                                else if (pollResult.requestStatus == L"DECLINED")
+                                {
+                                    std::wcout << L"\n[SERVER] >>> AUTHORIZATION DECLINED BY ADMINISTRATOR! <<<\n";
+                                    std::wcout << L"[SERVER] Device will remain blocked.\n";
+
+                                    decision = AccessDecision::BLOCK;
+
+                                    EventLogger::Instance().LogEvent(
+                                        SecurityEventType::USER_REJECTED,
+                                        device,
+                                        L"BLOCK",
+                                        L"Administrator declined authorization request on Central Dashboard"
+                                    );
+
+                                    decided = true;
+                                    break;
+                                }
+                            }
+
+                            std::wcout << L"." << std::flush;
+                            Sleep(pollIntervalMs);
+                            elapsedSeconds += (pollIntervalMs / 1000);
+                        }
+
+                        if (!decided)
+                        {
+                            std::wcout << L"\n[SERVER] Authorization request timed out (" << maxPollSeconds << L"s).\n";
+                            std::wcout << L"[SERVER] Device will remain quarantined.\n";
+                            decision = AccessDecision::BLOCK;
+
+                            EventLogger::Instance().LogEvent(
+                                SecurityEventType::DEVICE_BLOCKED,
+                                device,
+                                L"BLOCK",
+                                L"Authorization request timed out while awaiting administrator approval"
+                            );
+                        }
                     }
                 }
 
@@ -488,13 +657,21 @@ LRESULT CALLBACK WindowProc(
 
                     if (released)
                     {
-                        DevicePresenceMonitor::UntrackDevice(
-                            device.deviceId
+                        DevicePresenceMonitor::SetDeviceState(
+                            device.deviceId,
+                            DeviceTrackingState::RELEASED
                         );
 
                         std::wcout
                             << L"Enforcement Status : "
                             << L"DEVICE RELEASED\n";
+
+                        EventLogger::Instance().LogEvent(
+                            SecurityEventType::DEVICE_RELEASED,
+                            device,
+                            L"ALLOW",
+                            L"Device released from quarantine and operational"
+                        );
                     }
                     else
                     {
@@ -504,6 +681,13 @@ LRESULT CALLBACK WindowProc(
 
                         std::wcerr
                             << L"[SECURITY] Device remains quarantined.\n";
+
+                        EventLogger::Instance().LogEvent(
+                            SecurityEventType::DEVICE_BLOCKED,
+                            device,
+                            L"BLOCK",
+                            L"Device release failed; device remains quarantined"
+                        );
                     }
                 }
 
@@ -520,6 +704,13 @@ LRESULT CALLBACK WindowProc(
                     std::wcout
                         << L"Enforcement Status : "
                         << L"DEVICE REMAINS QUARANTINED\n";
+
+                    EventLogger::Instance().LogEvent(
+                        SecurityEventType::DEVICE_BLOCKED,
+                        device,
+                        L"BLOCK",
+                        L"Device access blocked by policy; remains disabled"
+                    );
                 }
             }
         }
@@ -567,6 +758,14 @@ LRESULT CALLBACK WindowProc(
                     << L"Device Interface: "
                     << devicePath
                     << L"\n";
+
+                EventLogger::Instance().LogSimpleEvent(
+                    SecurityEventType::DEVICE_REMOVED,
+                    L"",
+                    devicePath,
+                    L"-",
+                    L"USB device interface disconnected (OS notification)"
+                );
             }
         }
 
@@ -607,6 +806,17 @@ int main()
 
         return 1;
     }
+
+    if (!EventLogger::Instance().Initialize(L"usbips.db"))
+    {
+        std::wcerr
+            << L"[WARNING] Failed to initialize event logging database.\n";
+    }
+
+    // --------------------------------------------------------
+    // Start Background Sync Engine (Task 10 & 11)
+    // --------------------------------------------------------
+    SyncManager::Instance().Start(&g_allowlist, L"127.0.0.1", 8000, 5);
 
 
     // --------------------------------------------------------
@@ -736,7 +946,9 @@ int main()
         );
     }
 
+    SyncManager::Instance().Stop();
     DevicePresenceMonitor::Stop();
+    EventLogger::Instance().Close();
 
     DestroyWindow(hwnd);
 

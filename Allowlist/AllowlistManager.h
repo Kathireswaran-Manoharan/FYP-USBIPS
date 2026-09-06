@@ -5,6 +5,7 @@
 
 #include <string>
 #include <vector>
+#include <mutex>
 
 struct AllowedDevice
 {
@@ -32,7 +33,11 @@ public:
 
     bool AddDevice(const USBDevice& device);
 
+    bool AddAllowedDevice(const AllowedDevice& device);
+
     bool RemoveDevice(const USBDevice& device);
+
+    bool SyncWithRemote(const std::vector<AllowedDevice>& remoteDevices);
 
     std::vector<AllowedDevice> GetAllDevices();
 
@@ -41,6 +46,7 @@ public:
 private:
 
     sqlite3* db;
+    mutable std::mutex m_mutex;
 
     bool CreateTables();
 

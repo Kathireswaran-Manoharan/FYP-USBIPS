@@ -8,16 +8,22 @@
 #include <mutex>
 #include <vector>
 #include <atomic>
-#include <chrono>
+#include "../Models/USBDevice.h"
+
+enum class DeviceTrackingState
+{
+    QUARANTINED,
+    RELEASED
+};
 
 struct TrackedDevice
 {
     std::wstring deviceId;
     std::wstring deviceInterfacePath;
+    USBDevice device;
+    DeviceTrackingState state = DeviceTrackingState::QUARANTINED;
 
-    std::chrono::steady_clock::time_point
-        trackingStart;
-
+    std::chrono::steady_clock::time_point trackingStart;
     int missingChecks = 0;
 };
 
@@ -31,21 +37,32 @@ public:
     static void Stop();
 
     static void TrackDevice(
+        const USBDevice& device
+    );
+
+    static void TrackDevice(
         const std::wstring& deviceId,
         const std::wstring& deviceInterfacePath
+    );
+
+    static void SetDeviceState(
+        const std::wstring& deviceId,
+        DeviceTrackingState state
     );
 
     static void UntrackDevice(
         const std::wstring& deviceId
     );
 
-private:
-
-    static void MonitorLoop();
-
     static bool IsDevicePresent(
         const std::wstring& deviceId
     );
+
+    static std::vector<TrackedDevice> GetTrackedDevices();
+
+private:
+
+    static void MonitorLoop();
 
 private:
 

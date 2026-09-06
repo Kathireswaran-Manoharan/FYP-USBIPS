@@ -35,8 +35,22 @@ ARM64/
 # Local runtime data
 usbips.db
 usbips.db-*
+server/usbips_server.db
+*.db
+*.db-*
 
 # Operating-system files
 Thumbs.db
 ehthumbs.db
 Desktop.ini
+
+#vscode
+tasks.json
+c_cpp_properties.json
+
+#__pycache__
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.py.class
