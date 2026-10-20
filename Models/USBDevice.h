@@ -8,6 +8,7 @@ enum class DeviceType
     HID,
     STORAGE,
     NETWORK,
+    COMPOSITE,
     OTHER
 };
 
@@ -42,6 +43,8 @@ struct USBDevice
     DeviceType type = DeviceType::OTHER;
 
     bool hasHID = false;
+    bool hasKeyboard = false;
+    bool hasMouse = false;
     bool hasStorage = false;
     bool hasNetwork = false;
 

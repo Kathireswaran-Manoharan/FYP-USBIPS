@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 from .database.db import init_db
-from .api import clients, devices, requests, events
+from .api import clients, devices, requests, events, policies, protected_folders, incidents
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "templates")
@@ -45,10 +45,20 @@ app.include_router(clients.router)
 app.include_router(devices.router)
 app.include_router(requests.router)
 app.include_router(events.router)
+app.include_router(policies.router)
+app.include_router(protected_folders.router)
+app.include_router(incidents.router)
 
 @app.get("/", tags=["Dashboard UI"])
 async def serve_dashboard(request: Request):
-    return templates.TemplateResponse(request=request, name="index.html")
+    try:
+        return templates.TemplateResponse("index.html", {"request": request})
+    except TypeError:
+        return templates.TemplateResponse(request=request, name="index.html")
+
+@app.get("/dashboard", tags=["Dashboard UI"])
+async def serve_dashboard_alias(request: Request):
+    return await serve_dashboard(request)
 
 @app.get("/health", tags=["Health"])
 async def health_check():

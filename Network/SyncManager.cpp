@@ -4,6 +4,11 @@
 #include "SyncManager.h"
 #include "../Enforcement/EnforcementManager.h"
 #include "../Presence/DevicePresenceMonitor.h"
+#include "../AccessControl/PolicyConfig.h"
+#include "../AccessControl/ProtectedFileMonitor.h"
+#include "../AccessControl/StorageExecutionMonitor.h"
+#include "../AccessControl/USBNetworkAnomalyDetector.h"
+#include "../AccessControl/MinifilterClient.h"
 
 #include <iostream>
 
@@ -45,7 +50,7 @@ std::wstring SyncManager::GetSystemIpAddress()
     WSADATA wsaData;
     if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
     {
-        return L"127.0.0.1";
+        return L"UNAVAILABLE";
     }
 
     char hostname[256] = { 0 };
@@ -71,7 +76,7 @@ std::wstring SyncManager::GetSystemIpAddress()
     }
 
     WSACleanup();
-    return L"127.0.0.1";
+    return L"UNAVAILABLE";
 }
 
 std::wstring SyncManager::GetSystemOsVersion()
@@ -92,6 +97,8 @@ bool SyncManager::Start(
 
     m_allowlist = allowlist;
     m_intervalSeconds = intervalSeconds > 0 ? intervalSeconds : 15;
+
+    ProtectedFileMonitor::Instance().SetAllowlistManager(allowlist);
 
     RestClient::Instance().Configure(host, port);
 
@@ -196,11 +203,12 @@ bool SyncManager::PerformSyncCycle()
                                        << L") was REVOKED by Central Server!\n";
                             std::wcout << L"[SECURITY] Disabling physical peripheral internally via CM_Disable_DevNode...\n";
 
-                            bool disabled = EnforcementManager::QuarantineDevice(item.device);
+                            CONFIGRET crResult = CR_FAILURE;
+                            bool disabled = EnforcementManager::QuarantineDevice(item.device, &crResult);
                             if (disabled)
                             {
                                 DevicePresenceMonitor::SetDeviceState(item.deviceId, DeviceTrackingState::QUARANTINED);
-                                std::wcout << L"[OK] Revocation enforced. Peripheral is now DISABLED internally.\n";
+                                std::wcout << L"[OK] Revocation enforced. Peripheral is now DISABLED at OS level.\n";
                                 std::wcout << L"=======================================================\n";
 
                                 EventLogger::Instance().LogEvent(
@@ -212,8 +220,69 @@ bool SyncManager::PerformSyncCycle()
                             }
                             else
                             {
-                                std::wcerr << L"[ERROR] Failed to disable revoked device internally.\n";
+                                std::wcerr << L"[ERROR] Failed to disable revoked device at OS level ("
+                                           << EnforcementManager::ConfigRetToString(crResult) << L").\n";
                                 std::wcout << L"=======================================================\n";
+
+                                EventLogger::Instance().LogEvent(
+                                    SecurityEventType::DEVICE_BLOCKED,
+                                    item.device,
+                                    L"BLOCK",
+                                    L"Central server revoked authorization; OS disablement failed (" +
+                                    std::wstring(EnforcementManager::ConfigRetToString(crResult)) +
+                                    L"); locked by policy"
+                                );
+                            }
+                        }
+                    }
+                    else if (item.state == DeviceTrackingState::QUARANTINED)
+                    {
+                        // Requirement 4: Automatic allowlist refresh cannot reauthorize a device after a confirmed critical threat
+                        if (m_allowlist->HasActiveCriticalThreat(item.device))
+                        {
+                            continue;
+                        }
+
+                        if (m_allowlist->IsAllowed(item.device))
+                        {
+                            std::wcout << L"\n=======================================================\n";
+                            std::wcout << L"[SECURITY] Device " << item.device.vendorId
+                                       << L":" << item.device.productId
+                                       << L" (Serial: " << item.device.serialNumber
+                                       << L") was APPROVED by Central Server!\n";
+                            std::wcout << L"[SECURITY] Enabling physical peripheral via CM_Enable_DevNode...\n";
+
+                            CONFIGRET crResult = CR_FAILURE;
+                            bool released = EnforcementManager::ReleaseDevice(item.device, &crResult);
+                            if (released)
+                            {
+                                DevicePresenceMonitor::SetDeviceState(item.deviceId, DeviceTrackingState::RELEASED);
+                                std::wcout << L"[OK] Authorization enforced. Peripheral is now ENABLED at OS level.\n";
+                                std::wcout << L"=======================================================\n";
+
+                                EventLogger::Instance().LogEvent(
+                                    SecurityEventType::DEVICE_RELEASED,
+                                    item.device,
+                                    L"ALLOW",
+                                    L"Central server approved authorization; physical peripheral enabled in real-time"
+                                );
+
+                                ProtectedFileMonitor::Instance().SetActiveDevice(item.device);
+                            }
+                            else
+                            {
+                                std::wcerr << L"[ERROR] Failed to enable approved device at OS level ("
+                                           << EnforcementManager::ConfigRetToString(crResult) << L").\n";
+                                std::wcout << L"=======================================================\n";
+
+                                EventLogger::Instance().LogEvent(
+                                    SecurityEventType::DEVICE_BLOCKED,
+                                    item.device,
+                                    L"BLOCK",
+                                    L"Central server approved device, but OS enablement failed (" +
+                                    std::wstring(EnforcementManager::ConfigRetToString(crResult)) +
+                                    L"); check elevation"
+                                );
                             }
                         }
                     }
@@ -221,7 +290,35 @@ bool SyncManager::PerformSyncCycle()
             }
         }
 
-        // 4. Batch Upload Pending Events
+        // 4. Central Policy Synchronization (Algorithms 1-7)
+        PolicyConfig remotePolicy;
+        if (RestClient::Instance().FetchPolicyConfig(remotePolicy))
+        {
+            PolicyConfig::Instance() = remotePolicy;
+        }
+
+        // 4b. Protected Folder Policies Synchronization
+        std::vector<ProtectedFolder> remoteFolders;
+        if (RestClient::Instance().FetchProtectedFolderPolicies(remoteFolders))
+        {
+            ProtectedFileMonitor::Instance().UpdateWatchedFolders(remoteFolders);
+            MinifilterClient::Instance().SyncPolicies(remoteFolders);
+        }
+
+        // 5. Periodic Behavioral Scans (Algorithms 5 & 6)
+        if (PolicyConfig::Instance().blockStorageExecution)
+        {
+            StorageExecutionMonitor::Instance().ScanRunningProcesses(
+                PolicyConfig::Instance().autoTerminateStorageProcesses
+            );
+        }
+
+        if (PolicyConfig::Instance().blockUsbNetworkAdapters)
+        {
+            USBNetworkAnomalyDetector::Instance().InspectAdapters();
+        }
+
+        // 6. Batch Upload Pending Events
         auto pendingEvents = EventLogger::Instance().GetPendingSyncEvents(100);
         if (!pendingEvents.empty())
         {

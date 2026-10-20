@@ -14,6 +14,10 @@ public:
         DeviceType type
     );
 
+    static std::wstring GetSpecificTypeString(
+        const USBDevice& device
+    );
+
 private:
 
     static bool AnalyzeDeviceTree(

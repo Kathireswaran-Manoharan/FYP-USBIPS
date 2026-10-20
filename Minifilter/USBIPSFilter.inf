@@ -1,0 +1,94 @@
+;;;
+;;; USBIPSFilter.inf
+;;; Windows File System Minifilter Driver Setup Script
+;;; Module: Scenario 3 Protected-File Pre-Access Denial
+;;;
+
+[Version]
+Signature   = "$Windows NT$"
+Class       = "ActivityMonitor"                         ; Filter manager activity monitor class
+ClassGuid   = {b86dff51-a31e-4bac-b3cf-e8cfe75c01e2}
+Provider    = %ManufacturerName%
+DriverVer   = 10/20/2026,1.0.0.1
+CatalogFile = USBIPSFilter.cat
+
+[DestinationDirs]
+DefaultDestDir          = 12                            ; %windir%\system32\drivers
+USBIPSFilter.DriverFiles  = 12
+
+;;
+;; Default install sections
+;;
+
+[DefaultInstall]
+OptionDesc          = %ServiceDescription%
+CopyFiles           = USBIPSFilter.DriverFiles
+
+[DefaultInstall.Services]
+AddService          = %ServiceName%,,USBIPSFilter.Service
+
+;;
+;; Default uninstall sections
+;;
+
+[DefaultUninstall]
+DelFiles   = USBIPSFilter.DriverFiles
+
+[DefaultUninstall.Services]
+DelService = %ServiceName%,0x200                        ; SPSVCINST_STOPSERVICE
+
+;;
+;; Services Section
+;;
+
+[USBIPSFilter.Service]
+DisplayName      = %ServiceName%
+Description      = %ServiceDescription%
+ServiceBinary    = %12%\USBIPSFilter.sys                ; %windir%\system32\drivers\USBIPSFilter.sys
+Dependencies     = "FltMgr"
+ServiceType      = 2                                    ; SERVICE_FILE_SYSTEM_DRIVER
+StartType        = 3                                    ; SERVICE_DEMAND_START
+ErrorControl     = 1                                    ; SERVICE_ERROR_NORMAL
+LoadOrderGroup   = "FSFilter Activity Monitor"
+AddReg           = USBIPSFilter.AddRegistry
+
+;;
+;; Registry Modifications
+;;
+
+[USBIPSFilter.AddRegistry]
+HKR,,"DebugFlags",0x00010001 ,0x0
+HKR,,"SupportedFeatures",0x00010001,0x3
+HKR,"Instances","DefaultInstance",0x00000000,%DefaultInstance%
+HKR,"Instances\"%Instance1.Name%,"Altitude",0x00000000,%Instance1.Altitude%
+HKR,"Instances\"%Instance1.Name%,"Flags",0x00010001,%Instance1.Flags%
+
+;;
+;; Copy Files
+;;
+
+[USBIPSFilter.DriverFiles]
+USBIPSFilter.sys
+
+[SourceDisksFiles]
+USBIPSFilter.sys = 1,,
+
+[SourceDisksNames]
+1 = %DiskId1%,,,
+
+;;
+;; String Substitutions
+;;
+
+[Strings]
+ManufacturerName        = "USBIPS Defense Systems"
+ServiceDescription      = "USBIPS File System Pre-Access Denial Minifilter Driver"
+ServiceName             = "USBIPSFilter"
+DriverDir               = "drivers"
+DiskId1                 = "USBIPSFilter Installation Disk"
+
+; Instances specific information
+DefaultInstance         = "USBIPSFilter - Default Instance"
+Instance1.Name          = "USBIPSFilter - Default Instance"
+Instance1.Altitude      = "370050"
+Instance1.Flags         = 0x0              ; Allow automatic attachment

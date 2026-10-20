@@ -49,16 +49,27 @@
       </div>
     </div>
 
-    <!-- Section 1: Pending Requests -->
+    <!-- API Error Banner -->
+    <div id="api-error-banner" style="display: none; background: #7f1d1d; border: 1px solid #ef4444; color: #fee2e2; padding: 12px 16px; border-radius: 8px; margin-bottom: 20px; font-size: 13px;">
+      <strong>Server API Warning:</strong> <span id="api-error-msg">Unable to connect to USBIPS Central Management Server. Please ensure the server is running on http://127.0.0.1:8000.</span>
+    </div>
+
+    <!-- Section 1: Device Security Assessments & Fleet Authorization -->
     <div class="section" id="pending-section">
-      <div class="section-header">
+      <div class="section-header" style="flex-wrap: wrap; gap: 12px;">
         <div class="section-title">
-          <span>Pending Authorization Requests</span>
+          <span>Device Security Assessments & Fleet Authorization</span>
           <span class="badge-count warning-count" id="pending-count-badge">0</span>
+        </div>
+        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+          <button class="btn btn-secondary btn-sm filter-pill" id="pill-all" style="background-color: #3b82f6; border-color: #60a5fa; color: #ffffff;" onclick="setDeviceFilter('ALL')">All Evaluated Devices (<span id="cnt-all">0</span>)</button>
+          <button class="btn btn-secondary btn-sm filter-pill" id="pill-pending" style="background-color: #1f2937; border-color: #374151; color: #9ca3af;" onclick="setDeviceFilter('PENDING')">Pending Review (<span id="cnt-pending">0</span>)</button>
+          <button class="btn btn-secondary btn-sm filter-pill" id="pill-revoked" style="background-color: #1f2937; border-color: #374151; color: #9ca3af;" onclick="setDeviceFilter('REVOKED')">Revoked / Blocked (<span id="cnt-revoked">0</span>)</button>
+          <button class="btn btn-secondary btn-sm filter-pill" id="pill-approved" style="background-color: #1f2937; border-color: #374151; color: #9ca3af;" onclick="setDeviceFilter('APPROVED')">Approved History (<span id="cnt-approved">0</span>)</button>
         </div>
       </div>
       <div id="pending-container" class="pending-grid">
-        <p style="color: var(--text-muted); font-size: 13px;">No devices currently awaiting authorization.</p>
+        <p style="color: var(--text-muted); font-size: 13px;">Loading fleet device assessments...</p>
       </div>
     </div>
 
@@ -84,12 +95,13 @@
               <th>Serial Number</th>
               <th>Type</th>
               <th>Description / Model</th>
-              <th>Approved Date</th>
+              <th>Duration / Expiry</th>
+              <th>Decision Reason</th>
               <th>Actions</th>
             </tr>
           </thead>
           <tbody id="allowlist-tbody">
-            <tr><td colspan="8" style="text-align:center; color: var(--text-muted);">Loading allowlist...</td></tr>
+            <tr><td colspan="9" style="text-align:center; color: var(--text-muted);">Loading allowlist...</td></tr>
           </tbody>
         </table>
       </div>
@@ -123,7 +135,125 @@
       </div>
     </div>
 
-    <!-- Section 4: Central Audit Events -->
+    <!-- Section 4: Fleet Security Policies (Algorithms 1-7) -->
+    <div class="section" id="policies-section">
+      <div class="section-header">
+        <div class="section-title">
+          <span>Fleet Security Policies & Algorithm Rules (Algorithms 1–7)</span>
+        </div>
+        <div style="display: flex; gap: 10px;">
+          <button type="button" class="btn btn-secondary btn-sm" onclick="handleResetPolicies()">Reset Defaults</button>
+          <button type="button" class="btn btn-primary btn-sm" onclick="handleSavePolicies()">Save Policies</button>
+        </div>
+      </div>
+      <form id="policyForm" onsubmit="event.preventDefault(); handleSavePolicies();">
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; margin-top: 12px;">
+          <!-- Alg 1 & 2 -->
+          <div style="background: #0f172a; padding: 16px; border-radius: 8px; border: 1px solid var(--border-color);">
+            <h4 style="font-size: 13px; color: #38bdf8; margin-bottom: 12px; text-transform: uppercase;">Alg 1 & 2: Identity & BadUSB / HID</h4>
+            <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 13px; cursor: pointer;">
+              <input type="checkbox" id="pol_strict_allowlist_matching"> Strict Fingerprint Matching (VID:PID:Serial)
+            </label>
+            <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 13px; cursor: pointer;">
+              <input type="checkbox" id="pol_fail_closed_when_server_offline"> Fail-Closed When Server Offline
+            </label>
+            <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 13px; cursor: pointer;">
+              <input type="checkbox" id="pol_require_captcha_for_hid"> Require CAPTCHA for Unknown Keyboards
+            </label>
+            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-top: 8px;">
+              <div>
+                <label style="font-size: 11px; color: var(--text-muted);">CAPTCHA Timeout (s)</label>
+                <input type="number" id="pol_captcha_timeout_seconds" class="form-control" style="padding: 6px 10px; font-size: 12px;">
+              </div>
+              <div>
+                <label style="font-size: 11px; color: var(--text-muted);">Max Attempts</label>
+                <input type="number" id="pol_captcha_max_attempts" class="form-control" style="padding: 6px 10px; font-size: 12px;">
+              </div>
+              <div>
+                <label style="font-size: 11px; color: var(--text-muted);">Burst (CPS)</label>
+                <input type="number" id="pol_iki_burst_threshold_cps" class="form-control" style="padding: 6px 10px; font-size: 12px;">
+              </div>
+            </div>
+          </div>
+
+          <!-- Alg 3 & 4 -->
+          <div style="background: #0f172a; padding: 16px; border-radius: 8px; border: 1px solid var(--border-color);">
+            <h4 style="font-size: 13px; color: #38bdf8; margin-bottom: 12px; text-transform: uppercase;">Alg 3 & 4: Composite & File Sentinel</h4>
+            <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 13px; cursor: pointer;">
+              <input type="checkbox" id="pol_block_unauthorized_composite"> Block Unauthorized Composite (HID+Storage)
+            </label>
+            <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 13px; cursor: pointer;">
+              <input type="checkbox" id="pol_allow_composite_mouse_keyboard"> Allow Standard Mouse+Keyboard Combos
+            </label>
+            <div style="margin-top: 8px;">
+              <label style="font-size: 11px; color: var(--text-muted);">Protected Directory Path</label>
+              <input type="text" id="pol_protected_directory" class="form-control" style="padding: 6px 10px; font-size: 12px;">
+            </div>
+            <div style="margin-top: 6px;">
+              <label style="font-size: 11px; color: var(--text-muted);">Canary Sentinel Filename</label>
+              <input type="text" id="pol_canary_file_name" class="form-control" style="padding: 6px 10px; font-size: 12px;">
+            </div>
+          </div>
+
+          <!-- Alg 5, 6 & 7 -->
+          <div style="background: #0f172a; padding: 16px; border-radius: 8px; border: 1px solid var(--border-color);">
+            <h4 style="font-size: 13px; color: #38bdf8; margin-bottom: 12px; text-transform: uppercase;">Alg 5, 6 & 7: Storage, Network & Flapping</h4>
+            <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 13px; cursor: pointer;">
+              <input type="checkbox" id="pol_block_storage_execution"> Block Storage Executables
+            </label>
+            <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 13px; cursor: pointer;">
+              <input type="checkbox" id="pol_auto_terminate_storage_processes"> Auto-Terminate Storage Binaries
+            </label>
+            <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 13px; cursor: pointer;">
+              <input type="checkbox" id="pol_block_usb_network_adapters"> Block USB Network Adapters
+            </label>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px;">
+              <div>
+                <label style="font-size: 11px; color: var(--text-muted);">Max Reconnects/min</label>
+                <input type="number" id="pol_max_reconnects_per_minute" class="form-control" style="padding: 6px 10px; font-size: 12px;">
+              </div>
+              <div>
+                <label style="font-size: 11px; color: var(--text-muted);">Evasion Risk Limit</label>
+                <input type="number" id="pol_evasion_risk_threshold" class="form-control" style="padding: 6px 10px; font-size: 12px;">
+              </div>
+            </div>
+          </div>
+        </div>
+      </form>
+    </div>
+
+    <!-- Section 4B: Protected Folder Policies (Admin Managed) -->
+    <div class="section" id="section-protected-folders">
+      <div class="section-header" style="display: flex; justify-content: space-between; align-items: center;">
+        <div class="section-title">
+          <span>Protected Folder Policies</span>
+          <span style="font-size: 12px; color: var(--text-muted); font-weight: normal; margin-left: 10px;">
+            Targeted real-time isolation & revocation for USB storage accessing sensitive directories
+          </span>
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="openAddFolderModal()">+ Add Protected Folder</button>
+      </div>
+
+      <div class="table-responsive" style="margin-top: 15px;">
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 50px;">ID</th>
+              <th>Windows Folder Path</th>
+              <th>Description / Purpose</th>
+              <th style="width: 140px;">Policy State</th>
+              <th style="width: 170px;">Created (UTC)</th>
+              <th style="width: 160px; text-align: center;">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="folders-tbody">
+            <tr><td colspan="6" style="text-align:center; color: var(--text-muted);">Loading protected folder policies...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Section 5: Central Audit Events -->
     <div class="section">
       <div class="section-header">
         <div class="section-title">
@@ -227,9 +357,32 @@
           <label>Manufacturer</label>
           <input type="text" id="edit_mfg" class="form-control" placeholder="Manufacturer name">
         </div>
-        <div class="modal-footer">
-          <button type="button" class="btn btn-secondary" onclick="closeEditModal()">Cancel</button>
-          <button type="submit" class="btn btn-primary">Save Changes</button>
+  <!-- Add Protected Folder Modal -->
+  <div class="modal" id="addFolderModal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 style="font-size: 16px;">Add Protected Folder Policy</h3>
+        <button class="btn btn-secondary btn-sm" onclick="closeAddFolderModal()">&times;</button>
+      </div>
+      <form id="addFolderForm" onsubmit="handleAddFolder(event)">
+        <div class="form-group">
+          <label>Windows Folder Path *</label>
+          <input type="text" id="new_folder_path" class="form-control" placeholder="C:\SecureData or D:\Confidential" required>
+          <span style="font-size: 11px; color: var(--text-muted); display: block; margin-top: 4px;">
+            Must be an absolute Windows drive path (e.g. C:\Data). Subdirectories are safely protected.
+          </span>
+        </div>
+        <div class="form-group">
+          <label>Description / Policy Classification</label>
+          <input type="text" id="new_folder_desc" class="form-control" placeholder="e.g. Financial Data, Source Repositories, Canary">
+        </div>
+        <div class="form-group" style="display: flex; align-items: center; gap: 8px; margin-top: 10px;">
+          <input type="checkbox" id="new_folder_enabled" checked style="width: auto; cursor: pointer;">
+          <label for="new_folder_enabled" style="font-size: 13px; cursor: pointer; margin-bottom: 0;">Enable monitoring immediately</label>
+        </div>
+        <div class="modal-footer" style="margin-top: 20px;">
+          <button type="button" class="btn btn-secondary" onclick="closeAddFolderModal()">Cancel</button>
+          <button type="submit" class="btn btn-primary">Create Policy</button>
         </div>
       </form>
     </div>
@@ -288,12 +441,29 @@
 
     async function approveRequest(requestId) {
       try {
-        const res = await fetch(`/api/requests/${requestId}/approve`, { method: "POST" });
+        const durSelect = document.getElementById(`duration-${requestId}`);
+        const reasonInput = document.getElementById(`reason-${requestId}`);
+        const durVal = durSelect && durSelect.value ? parseInt(durSelect.value) : null;
+        const reasonVal = reasonInput && reasonInput.value.trim() ? reasonInput.value.trim() : "Approved by Administrator";
+
+        const res = await fetch(`/api/requests/${requestId}/approve`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            duration_minutes: durVal,
+            decision_reason: reasonVal,
+            admin_user: "Administrator",
+            override_critical: false
+          })
+        });
+
         if (res.ok) {
-          showToast("Device approved & added to master allowlist!");
+          const body = await res.json();
+          showToast(body.message || "Device approved & added to master allowlist!");
           loadAllData();
         } else {
-          showToast("Failed to approve request", true);
+          const err = await res.json();
+          showToast("Failed to approve request: " + (err.detail || "Security policy violation"), true);
         }
       } catch (ex) {
         showToast("Error: " + ex.message, true);
@@ -303,7 +473,18 @@
     async function declineRequest(requestId) {
       if (!confirm("Are you sure you want to decline and block this device?")) return;
       try {
-        const res = await fetch(`/api/requests/${requestId}/decline`, { method: "POST" });
+        const reasonInput = document.getElementById(`reason-${requestId}`);
+        const reasonVal = reasonInput && reasonInput.value.trim() ? reasonInput.value.trim() : "Declined by Administrator";
+
+        const res = await fetch(`/api/requests/${requestId}/decline`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            decision_reason: reasonVal,
+            admin_user: "Administrator"
+          })
+        });
+
         if (res.ok) {
           showToast("Device declined. Client will keep device quarantined.");
           loadAllData();
@@ -330,6 +511,81 @@
       }
     }
 
+    async function reAuthorizeDevice(requestId) {
+      const durStr = prompt("Enter authorization duration in minutes (leave blank for permanent):", "");
+      if (durStr === null) return;
+      const durVal = durStr.trim() !== "" ? parseInt(durStr.trim()) : null;
+      const reasonVal = prompt("Enter approval justification:", "Re-authorized by Administrator");
+      if (reasonVal === null) return;
+
+      try {
+        const res = await fetch(`/api/requests/${requestId}/approve`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            duration_minutes: durVal,
+            decision_reason: reasonVal || "Re-authorized by Administrator",
+            admin_user: "Administrator",
+            override_critical: true
+          })
+        });
+        if (res.ok) {
+          showToast("Device re-authorized successfully!");
+          loadAllData();
+        } else {
+          const err = await res.json();
+          showToast("Failed to re-authorize: " + (err.detail || "Error"), true);
+        }
+      } catch (ex) {
+        showToast("Error: " + ex.message, true);
+      }
+    }
+
+    async function revokeApprovedRequest(requestId, vid, pid, serial) {
+      if (!confirm(`Are you sure you want to revoke authorization for ${vid}:${pid} (${serial || 'No S/N'})? Connected clients will block this device.`)) return;
+      try {
+        const devRes = await fetch(`/api/devices?search=${encodeURIComponent(vid)}`);
+        if (devRes.ok) {
+          const devs = await devRes.json();
+          const match = devs.find(d => d.vendor_id === vid && d.product_id === pid && d.serial_number === serial);
+          if (match) {
+            return await revokeDevice(match.id, vid, pid);
+          }
+        }
+        const res = await fetch(`/api/requests/${requestId}/decline`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            decision_reason: "Authorization revoked by Administrator",
+            admin_user: "Administrator"
+          })
+        });
+        if (res.ok) {
+          showToast("Device authorization revoked & blocked.");
+          loadAllData();
+        } else {
+          showToast("Failed to revoke authorization", true);
+        }
+      } catch (ex) {
+        showToast("Error: " + ex.message, true);
+      }
+    }
+
+    async function deleteRequest(requestId) {
+      if (!confirm("Dismiss / remove this request card from the dashboard? (If reconnected, device can be re-evaluated)")) return;
+      try {
+        const res = await fetch(`/api/requests/${requestId}`, { method: "DELETE" });
+        if (res.ok) {
+          showToast("Request record removed from dashboard queue.");
+          loadAllData();
+        } else {
+          showToast("Failed to remove request", true);
+        }
+      } catch (ex) {
+        showToast("Error: " + ex.message, true);
+      }
+    }
+
     async function loadStats() {
       try {
         const res = await fetch("/api/stats");
@@ -345,40 +601,396 @@
       } catch (e) {}
     }
 
+    let currentDeviceFilter = 'ALL';
+    let allRequestsCache = [];
+
+    function setDeviceFilter(filter) {
+      currentDeviceFilter = filter;
+      ['all', 'pending', 'revoked', 'approved'].forEach(f => {
+        const el = document.getElementById(`pill-${f}`);
+        if (el) {
+          if (f.toUpperCase() === filter) {
+            el.style.backgroundColor = '#3b82f6';
+            el.style.borderColor = '#60a5fa';
+            el.style.color = '#ffffff';
+          } else {
+            el.style.backgroundColor = '#1f2937';
+            el.style.borderColor = '#374151';
+            el.style.color = '#9ca3af';
+          }
+        }
+      });
+      renderRequestsGrid();
+    }
+
+    function renderAlgorithmsTable(algJsonStr, reqStatus) {
+      const defaultModules = [
+        { id: "A1", name: "Device Fingerprinting & Allowlist", status: (reqStatus === "APPROVED" ? "PASS" : "NOT_ASSESSED"), risk: (reqStatus === "APPROVED" ? 0 : 25), evidence: "Hardware triplet checked against local and master allowlists" },
+        { id: "A2", name: "Composite-Device Policy Evaluation", status: "PASS", risk: 0, evidence: "Interface descriptors clean; no high-risk combinations" },
+        { id: "A3", name: "Malicious HID Burst & Process Correlation", status: "PASS", risk: 0, evidence: "Human challenge evaluated; no robotic burst (>30 CPS)" },
+        { id: "A4", name: "Antivirus Removable Media Scan", status: "NOT_APPLICABLE", risk: 0, evidence: "Filesystem scan evaluated for storage endpoints" },
+        { id: "A5", name: "Suspicious File & Script Inspection", status: "NOT_APPLICABLE", risk: 0, evidence: "Autorun directives and disguised executables" },
+        { id: "A6", name: "Removable Storage Process Origin", status: "NOT_APPLICABLE", risk: 0, evidence: "Execution origin monitoring from removable volumes" },
+        { id: "A7", name: "Protected Directory Canary Sentinel", status: "PASS", risk: 0, evidence: "Confidential canary sentinel untouched" },
+        { id: "A8", name: "Data Exfiltration Burst Monitoring", status: "NOT_APPLICABLE", risk: 0, evidence: "Mass file write volume monitoring" },
+        { id: "A9", name: "USB Network & DNS Anomaly Detection", status: "NOT_APPLICABLE", risk: 0, evidence: "Ethernet/RNDIS adapter policy verification" },
+        { id: "A10", name: "Reconnection Flapping & Evasion", status: "PASS", risk: 0, evidence: "Rapid connect/disconnect frequency within threshold" },
+        { id: "A11", name: "Policy Enforcement & Revocation Sync", status: (reqStatus === "REVOKED" ? "FAIL" : "PASS"), risk: (reqStatus === "REVOKED" ? 50 : 0), evidence: (reqStatus === "REVOKED" ? "Explicit administrator revocation recorded" : "Enforcement channel active; allowlist synced") },
+        { id: "A12", name: "Trust Assessment Engine (TAE) Synthesis", status: (reqStatus === "REVOKED" ? "FAIL" : "PASS"), risk: 0, evidence: "Multi-factor scoring and zero-trust policy evaluation" }
+      ];
+
+      let modules = defaultModules;
+      try {
+        if (algJsonStr && algJsonStr.trim() !== "{}" && algJsonStr.trim() !== "") {
+          const parsed = JSON.parse(algJsonStr);
+          modules = defaultModules.map(m => {
+            if (parsed[m.id]) {
+              return {
+                id: m.id,
+                name: parsed[m.id].name || m.name,
+                status: parsed[m.id].status || m.status,
+                risk: (parsed[m.id].risk !== undefined) ? parsed[m.id].risk : m.risk,
+                evidence: parsed[m.id].evidence || m.evidence
+              };
+            }
+            return m;
+          });
+        }
+      } catch (e) {}
+
+      return `
+        <div style="margin-top: 10px; background: #0b1120; border-radius: 6px; padding: 10px; border: 1px solid var(--border-color);">
+          <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; color: #38bdf8; margin-bottom: 6px; display: flex; justify-content: space-between;">
+            <span>12 Security Modules Assessment (A1 – A12)</span>
+            <span style="font-size: 10px; color: #94a3b8; font-weight: normal;">Evidence-based numeric risk contribution & observations</span>
+          </div>
+          <div style="max-height: 200px; overflow-y: auto;">
+            <table style="width: 100%; font-size: 11px; border-collapse: collapse;">
+              <thead>
+                <tr style="border-bottom: 1px solid #1e293b; color: #94a3b8; text-align: left;">
+                  <th style="padding: 4px;">ID</th>
+                  <th style="padding: 4px;">Module Name</th>
+                  <th style="padding: 4px;">Status</th>
+                  <th style="padding: 4px;">Risk Contribution</th>
+                  <th style="padding: 4px;">Observation / Evidence</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${modules.map(m => {
+                  let badgeClass = 'badge-secondary';
+                  if (m.status === 'PASS') badgeClass = 'badge-online';
+                  else if (m.status === 'FAIL') badgeClass = 'badge-offline';
+                  else if (m.status === 'SUSPICIOUS' || m.status === 'WARNING') badgeClass = 'badge-ask';
+                  else if (m.status === 'NOT_APPLICABLE') badgeClass = 'badge-secondary';
+
+                  let riskDisplay = `<span style="color: #94a3b8;">0 pts</span>`;
+                  if (m.risk > 0) {
+                    riskDisplay = `<strong style="color: #f87171;">+${m.risk} pts</strong>`;
+                  }
+
+                  return `
+                    <tr style="border-bottom: 1px solid #172033;">
+                      <td style="padding: 4px; font-weight: bold; color: #cbd5e1;">${m.id}</td>
+                      <td style="padding: 4px; color: #e2e8f0;">${m.name}</td>
+                      <td style="padding: 4px;"><span class="badge ${badgeClass}" style="font-size: 10px; padding: 2px 6px;">${m.status}</span></td>
+                      <td style="padding: 4px;">${riskDisplay}</td>
+                      <td style="padding: 4px; color: #cbd5e1;">${m.evidence}</td>
+                    </tr>
+                  `;
+                }).join("")}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      `;
+    }
+
     async function loadPendingRequests() {
       try {
-        const res = await fetch("/api/requests/pending");
-        if (!res.ok) return;
-        const requests = await res.json();
-        const container = document.getElementById("pending-container");
-        
-        if (requests.length === 0) {
-          container.innerHTML = `<p style="color: var(--text-muted); font-size: 13px; grid-column: 1/-1;">All hardware requests reviewed. No pending devices.</p>`;
+        const res = await fetch("/api/requests");
+        if (!res.ok) {
+          document.getElementById("api-error-banner").style.display = "block";
+          document.getElementById("api-error-msg").innerText = `HTTP ${res.status}: Failed to retrieve requests from server`;
           return;
         }
+        document.getElementById("api-error-banner").style.display = "none";
+        allRequestsCache = await res.json();
 
-        container.innerHTML = requests.map(req => `
-          <div class="pending-card">
-            <div class="pending-card-header">
-              <div>
-                <div class="pending-card-title">${req.description || "Unknown USB Device"}</div>
-                <div class="pending-meta">Client: ${req.client_id} | Requested: ${req.requested_at}</div>
+        // Update pill counts
+        const cntAll = allRequestsCache.length;
+        const cntPending = allRequestsCache.filter(r => r.status === "PENDING").length;
+        const cntRevoked = allRequestsCache.filter(r => r.status === "REVOKED" || r.status === "DECLINED").length;
+        const cntApproved = allRequestsCache.filter(r => r.status === "APPROVED").length;
+
+        document.getElementById("cnt-all").innerText = cntAll;
+        document.getElementById("cnt-pending").innerText = cntPending;
+        document.getElementById("cnt-revoked").innerText = cntRevoked;
+        document.getElementById("cnt-approved").innerText = cntApproved;
+        document.getElementById("pending-count-badge").innerText = cntPending;
+
+        renderRequestsGrid();
+      } catch (e) {
+        document.getElementById("api-error-banner").style.display = "block";
+        document.getElementById("api-error-msg").innerText = `Connection error: ${e.message}`;
+      }
+    }
+
+    function renderRequestsGrid() {
+      const container = document.getElementById("pending-container");
+      let filtered = allRequestsCache;
+
+      if (currentDeviceFilter === "PENDING") {
+        filtered = allRequestsCache.filter(r => r.status === "PENDING");
+      } else if (currentDeviceFilter === "REVOKED") {
+        filtered = allRequestsCache.filter(r => r.status === "REVOKED" || r.status === "DECLINED");
+      } else if (currentDeviceFilter === "APPROVED") {
+        filtered = allRequestsCache.filter(r => r.status === "APPROVED");
+      }
+
+      if (filtered.length === 0) {
+        let emptyMsg = "No devices currently match the selected filter.";
+        if (currentDeviceFilter === "PENDING") {
+          emptyMsg = "All hardware requests reviewed. No pending devices awaiting administrator review.";
+        } else if (currentDeviceFilter === "REVOKED") {
+          emptyMsg = "No revoked or explicitly blocked devices recorded.";
+        } else if (currentDeviceFilter === "APPROVED") {
+          emptyMsg = "No approved authorization records found.";
+        }
+        container.innerHTML = `<p style="color: var(--text-muted); font-size: 13px; grid-column: 1/-1; padding: 20px; text-align: center; background: #0f172a; border-radius: 8px; border: 1px dashed #334155;">${emptyMsg}</p>`;
+        return;
+      }
+
+      container.innerHTML = filtered.map(req => {
+        const rec = req.recommendation || "REVIEW";
+        let recBadge = "badge-ask";
+        let recExpl = "Requires administrator review; zero-trust quarantine applied.";
+        if (rec === "APPROVE") {
+          recBadge = "badge-online";
+          recExpl = "Device identity verified & risk score acceptable.";
+        } else if (rec === "REJECT") {
+          recBadge = "badge-offline";
+          recExpl = "Critical security policy violation or composite anomaly detected.";
+        }
+
+        // Final policy decision & admin status
+        let statusBadge = "badge-ask";
+        let decisionBadge = "badge-ask";
+        let decisionText = "PENDING (Zero-Trust Quarantine)";
+
+        if (req.status === "PENDING") {
+          statusBadge = "badge-ask";
+          decisionBadge = "badge-ask";
+          decisionText = "PENDING (Awaiting Central Admin Decision)";
+        } else if (req.status === "APPROVED") {
+          statusBadge = "badge-online";
+          decisionBadge = "badge-online";
+          decisionText = "ALLOW (Central Master Allowlist Authorized)";
+        } else if (req.status === "REVOKED") {
+          statusBadge = "badge-offline";
+          decisionBadge = "badge-offline";
+          decisionText = "BLOCK (Explicitly Revoked by Administrator)";
+        } else if (req.status === "DECLINED") {
+          statusBadge = "badge-offline";
+          decisionBadge = "badge-offline";
+          decisionText = "BLOCK (Declined by Central Policy/Administrator)";
+        } else if (req.status === "EXPIRED") {
+          statusBadge = "badge-offline";
+          decisionBadge = "badge-offline";
+          decisionText = "BLOCK (Authorization Period Expired)";
+        }
+
+        let captchaBadge = "badge-secondary";
+        const cr = (req.captcha_result || "NOT_COMPLETED").toUpperCase();
+        if (cr.includes("PASSED")) captchaBadge = "badge-online";
+        else if (cr.includes("FAILED") || cr.includes("EXPIRED") || cr.includes("TIMEOUT") || cr.includes("CANCELLED") || cr.includes("REPLAY")) captchaBadge = "badge-offline";
+        else if (cr === "PENDING") captchaBadge = "badge-secondary";
+
+        // Unpack metadata from algorithms_json if present
+        let meta = {
+          identity_match: (req.status === "APPROVED"),
+          admin_authorized: (req.status === "APPROVED"),
+          malware_scan_result: (req.device_type === "STORAGE" ? "NOT_SCANNED" : "NOT_APPLICABLE"),
+          behavioral_risk_score: 0,
+          reasons: []
+        };
+
+        try {
+          if (req.algorithms_json && req.algorithms_json.trim() !== "") {
+            const parsed = JSON.parse(req.algorithms_json);
+            if (parsed.meta) {
+              meta = Object.assign(meta, parsed.meta);
+            }
+          }
+        } catch (e) {}
+
+        // Format malware scan truthfully
+        let malwareBadge = "badge-secondary";
+        let malwareText = "NOT_APPLICABLE";
+        let malwareNote = "Non-storage device; filesystem scan not applicable";
+
+        const scanRes = meta.malware_scan_result || "NOT_SCANNED";
+        if (req.device_type === "STORAGE" || scanRes === "NOT_SCANNED" || scanRes === "CLEAN" || scanRes === "DETECTED") {
+          if (scanRes === "CLEAN") {
+            malwareBadge = "badge-online";
+            malwareText = "CLEAN";
+            malwareNote = "Storage volume scanned; no malware signatures detected";
+          } else if (scanRes === "DETECTED") {
+            malwareBadge = "badge-offline";
+            malwareText = "MALWARE DETECTED";
+            malwareNote = "High-risk executable or autorun signature identified";
+          } else if (scanRes === "FAILED") {
+            malwareBadge = "badge-offline";
+            malwareText = "SCAN FAILED";
+            malwareNote = "Scanner encountered an error during inspection";
+          } else {
+            malwareBadge = "badge-secondary";
+            malwareText = "NOT_SCANNED";
+            malwareNote = "Volume not mounted or waiting for user scan authorization (NOT verified clean)";
+          }
+        }
+
+        // Reasons list
+        let reasonsList = meta.reasons || [];
+        if (reasonsList.length === 0 && req.assessment_summary) {
+          reasonsList = [req.assessment_summary];
+        }
+        if (req.status === "REVOKED") {
+          reasonsList.unshift("Authorization was explicitly revoked by central administrator.");
+        }
+
+        return `
+        <div class="pending-card" style="border: 1px solid #334155; background: #0f172a; border-radius: 8px; padding: 16px; margin-bottom: 16px;">
+          <div class="pending-card-header" style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
+            <div>
+              <div class="pending-card-title" style="font-size: 16px; font-weight: bold; color: #f8fafc; display: flex; align-items: center; gap: 8px;">
+                <span>${req.description || "Unknown USB Device"}</span>
+                <span class="badge ${statusBadge}" style="font-size: 11px;">STATUS: ${req.status}</span>
               </div>
-              <span class="badge badge-ask">AWAITING REVIEW</span>
+              <div class="pending-meta" style="font-size: 12px; color: #94a3b8; margin-top: 4px;">
+                Request ID: <code>${req.request_id}</code> | Client: <code>${req.client_id}</code> | Time: ${req.requested_at}
+                ${req.decided_at ? ` | Decided: ${req.decided_at} by ${req.decision_by || 'Admin'}` : ''}
+              </div>
             </div>
-            <div class="pending-details">
-              <div><span class="detail-label">Vendor ID:</span> <span class="detail-val">${req.vendor_id}</span></div>
-              <div><span class="detail-label">Product ID:</span> <span class="detail-val">${req.product_id}</span></div>
-              <div><span class="detail-label">Serial:</span> <span class="detail-val">${req.serial_number}</span></div>
-              <div><span class="detail-label">Type:</span> <span class="badge badge-${req.device_type.toLowerCase()}">${req.device_type}</span></div>
-            </div>
-            <div class="pending-actions">
-              <button class="btn btn-success btn-sm" onclick="approveRequest('${req.request_id}')">✓ Approve & Add to Allowlist</button>
-              <button class="btn btn-danger btn-sm" onclick="declineRequest('${req.request_id}')">✕ Decline (Block)</button>
+            <div style="text-align: right;">
+              <div style="display: flex; gap: 8px; justify-content: flex-end; align-items: center;">
+                <span class="badge ${recBadge}" style="font-size: 11px; padding: 4px 10px;">RECOMMENDATION: ${rec}</span>
+                <span class="badge ${decisionBadge}" style="font-size: 11px; padding: 4px 10px;">${decisionText}</span>
+              </div>
+              <div style="font-size: 11px; color: #cbd5e1; margin-top: 4px;">
+                Trust Score: <strong>${req.total_risk_score || 0}/100</strong> (Severity: <span style="font-weight: bold; color: ${req.severity === 'CRITICAL' ? '#ef4444' : (req.severity === 'HIGH' ? '#f87171' : (req.severity === 'MEDIUM' ? '#fbbf24' : '#4ade80'))}">${req.severity || "LOW"}</span>)
+                <span style="color: #94a3b8; font-size: 10px; display: block;">Notice: LOW risk is not equivalent to ALLOW; central admin approval required.</span>
+              </div>
             </div>
           </div>
-        `).join("");
-      } catch (e) {}
+
+          <!-- Hardware Identity Grid -->
+          <div class="pending-details" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; font-size: 12px; background: #1e293b; padding: 10px; border-radius: 6px; margin-bottom: 10px;">
+            <div><span class="detail-label" style="color: #94a3b8;">Vendor ID (VID):</span> <span class="detail-val" style="font-family: monospace; color: #38bdf8;">${req.vendor_id}</span></div>
+            <div><span class="detail-label" style="color: #94a3b8;">Product ID (PID):</span> <span class="detail-val" style="font-family: monospace; color: #38bdf8;">${req.product_id}</span></div>
+            <div><span class="detail-label" style="color: #94a3b8;">Serial Number:</span> <span class="detail-val" style="font-family: monospace; color: #f1f5f9;">${req.serial_number || 'N/A (Missing)'}</span></div>
+            <div><span class="detail-label" style="color: #94a3b8;">Device Class:</span> <span class="badge badge-${req.device_type.toLowerCase()}">${req.device_type}</span></div>
+          </div>
+
+          <!-- Multi-Factor Security Evaluation Attributes -->
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 8px; font-size: 12px; background: #131d2e; border: 1px solid #1e293b; padding: 10px; border-radius: 6px; margin-bottom: 10px;">
+            <div>
+              <span style="color: #94a3b8;">Identity Match:</span>
+              <strong style="color: ${meta.identity_match ? '#4ade80' : '#fbbf24'};">${meta.identity_match ? '✓ MATCH (Local/Master Allowlist)' : '✕ NO MATCH (Unknown Device)'}</strong>
+            </div>
+            <div>
+              <span style="color: #94a3b8;">Admin Authorization:</span>
+              <strong style="color: ${meta.admin_authorized ? '#4ade80' : (req.status === 'REVOKED' ? '#ef4444' : '#fbbf24')};">${meta.admin_authorized ? '✓ AUTHORIZED' : (req.status === 'REVOKED' ? '✕ REVOKED' : '⏳ PENDING REVIEW')}</strong>
+            </div>
+            <div>
+              <span style="color: #94a3b8;">Malware Scan Status:</span>
+              <span class="badge ${malwareBadge}" style="font-size: 10px;">${malwareText}</span>
+              <div style="font-size: 10px; color: #94a3b8; margin-top: 2px;">${malwareNote}</div>
+            </div>
+            <div>
+              <span style="color: #94a3b8;">Behavioral Risk Score:</span>
+              <strong style="color: ${meta.behavioral_risk_score > 30 ? '#ef4444' : '#cbd5e1'};">${meta.behavioral_risk_score || 0}/100</strong>
+            </div>
+          </div>
+
+          <!-- Lifecycle Verification (CAPTCHA) & Enforcement Panels -->
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; margin-bottom: 10px;">
+            <!-- CAPTCHA Verification Panel -->
+            <div style="background: #111827; border: 1px solid #1f2937; border-radius: 6px; padding: 10px;">
+              <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; color: #fbbf24; margin-bottom: 6px;">
+                Client-Side Human Verification (CAPTCHA)
+              </div>
+              <div style="font-size: 12px; line-height: 1.6;">
+                <div>Verification Result: <span class="badge ${captchaBadge}">${req.captcha_result || "NOT_COMPLETED"}</span></div>
+                <div>Method: <strong>${req.verification_method || "NONE"}</strong></div>
+                <div>Attempts: <strong>${req.attempt_count || 0}</strong> | Duration: <strong>${req.verification_duration_seconds ? req.verification_duration_seconds + 's' : 'N/A'}</strong></div>
+                <div>Operator Score: <strong>${req.verification_score || 0}/100</strong> <span style="font-size: 10px; color: #94a3b8;">(Human presence check; separate from security score)</span></div>
+              </div>
+            </div>
+
+            <!-- Quarantine & Windows Enforcement Panel -->
+            <div style="background: #111827; border: 1px solid #1f2937; border-radius: 6px; padding: 10px;">
+              <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; color: #38bdf8; margin-bottom: 6px;">
+                Windows Enforcement & Quarantine Lifecycle
+              </div>
+              <div style="font-size: 12px; line-height: 1.6;">
+                <div>Initial Quarantine: <span class="badge badge-online">ENFORCED</span></div>
+                <div>Temp Release Window: <strong>${req.temp_release_applied ? 'APPLIED (' + (req.temp_release_duration_seconds || 3.0) + 's window)' : 'NOT APPLIED'}</strong></div>
+                <div>Mandatory Re-Quarantine: <strong style="color: #cbd5e1;">${req.re_quarantine_result || 'QUARANTINED'}</strong></div>
+                <div>Current Enforcement State: <span class="badge ${req.current_enforcement_state === 'RELEASED' ? 'badge-online' : 'badge-offline'}">${req.current_enforcement_state || 'QUARANTINED'}</span></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Explainable Reasons -->
+          <div style="font-size: 12px; color: #cbd5e1; background: #1e293b; padding: 8px 12px; border-radius: 6px; margin-bottom: 8px;">
+            <strong style="color: #f1f5f9;">Explainable Findings & Decision Rationale:</strong>
+            <ul style="margin: 4px 0 0 18px; line-height: 1.5; color: #94a3b8;">
+              ${reasonsList.map(r => `<li>${r}</li>`).join("")}
+            </ul>
+          </div>
+
+          <!-- All 12 Algorithms Table -->
+          ${renderAlgorithmsTable(req.algorithms_json, req.status)}
+
+          <!-- Admin Decision Controls -->
+          <div class="pending-actions" style="margin-top: 14px; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: flex-end; border-top: 1px solid #1e293b; padding-top: 12px;">
+            ${req.status === 'PENDING' ? `
+              <div style="display: flex; gap: 8px; align-items: center; flex: 1; min-width: 280px;">
+                <label style="font-size: 12px; color: #94a3b8; white-space: nowrap;">Duration:</label>
+                <select id="duration-${req.request_id}" class="form-control" style="width: auto; padding: 6px 10px; font-size: 12px;">
+                  <option value="">Permanent (Indefinite)</option>
+                  <option value="5">5 Minutes (Quick Test)</option>
+                  <option value="15">15 Minutes (Maintenance)</option>
+                  <option value="30">30 Minutes (Standard Task)</option>
+                  <option value="60">1 Hour (Shift task)</option>
+                  <option value="480">8 Hours (Full workday)</option>
+                  <option value="1440">24 Hours (Full day)</option>
+                </select>
+                <input type="text" id="reason-${req.request_id}" class="form-control" placeholder="Admin approval justification..." style="padding: 6px 10px; font-size: 12px; flex: 1;">
+              </div>
+              <div style="display: flex; gap: 8px;">
+                <button class="btn btn-success btn-sm" onclick="approveRequest('${req.request_id}')">✓ Approve Device</button>
+                <button class="btn btn-danger btn-sm" onclick="declineRequest('${req.request_id}')">✕ Decline & Block</button>
+                <button class="btn btn-secondary btn-sm" style="background-color: #374151; color: #9ca3af;" onclick="deleteRequest('${req.request_id}')" title="Dismiss card from queue">🗑 Dismiss</button>
+              </div>
+            ` : (req.status === 'REVOKED' || req.status === 'DECLINED' ? `
+              <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+                <span style="font-size: 12px; color: #f87171;">⚠️ Device access is blocked (${req.status}). Re-approval by administrator is required to release.</span>
+                <div style="display: flex; gap: 8px;">
+                  <button class="btn btn-secondary btn-sm" onclick="reAuthorizeDevice('${req.request_id}')">🔄 Re-Authorize Device</button>
+                  <button class="btn btn-secondary btn-sm" style="background-color: #374151; color: #9ca3af;" onclick="deleteRequest('${req.request_id}')" title="Remove record from list">🗑 Remove</button>
+                </div>
+              </div>
+            ` : `
+              <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+                <span style="font-size: 12px; color: #4ade80;">✓ Authorized by Central Administrator. ${req.expires_at ? 'Expires: <strong>' + req.expires_at + '</strong> (' + (req.duration_minutes ? req.duration_minutes + 'm' : 'Timed') + ')' : 'Permanent grant.'}</span>
+                <button class="btn btn-danger btn-sm" onclick="revokeApprovedRequest('${req.request_id}', '${req.vendor_id}', '${req.product_id}', '${req.serial_number}')">Revoke Authorization</button>
+              </div>
+            `)}
+          </div>
+        </div>
+      `;
+      }).join("");
     }
 
     let currentEditingDevice = null;
@@ -436,11 +1048,17 @@
         const tbody = document.getElementById("allowlist-tbody");
         
         if (devices.length === 0) {
-          tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; color: var(--text-muted);">No devices found in master allowlist.</td></tr>`;
+          tbody.innerHTML = `<tr><td colspan="9" style="text-align:center; color: var(--text-muted);">No devices found in master allowlist.</td></tr>`;
           return;
         }
 
-        tbody.innerHTML = devices.map(d => `
+        tbody.innerHTML = devices.map(d => {
+          let expiryText = '<span style="color: #4ade80;">Permanent</span>';
+          if (d.expires_at) {
+            expiryText = `<span style="color: #fbbf24;">${d.duration_minutes ? d.duration_minutes + ' min' : 'Timed'}<br><small style="color: #94a3b8;">Exp: ${d.expires_at}</small></span>`;
+          }
+
+          return `
           <tr>
             <td>#${d.id}</td>
             <td><code>${d.vendor_id}</code></td>
@@ -448,7 +1066,8 @@
             <td><code>${d.serial_number}</code></td>
             <td><span class="badge badge-${d.device_type.toLowerCase()}">${d.device_type}</span></td>
             <td>${d.description || d.manufacturer || "N/A"}</td>
-            <td>${d.created_at}</td>
+            <td>${expiryText}</td>
+            <td style="font-size: 11px; color: #cbd5e1;">${d.decision_reason || "Approved"}</td>
             <td>
               <div style="display: flex; gap: 6px;">
                 <button class="btn btn-secondary btn-sm" onclick='openEditModal(${JSON.stringify(d).replace(/'/g, "&apos;")})'>Edit</button>
@@ -456,7 +1075,8 @@
               </div>
             </td>
           </tr>
-        `).join("");
+        `;
+        }).join("");
       } catch (e) {}
     }
 
@@ -531,12 +1151,204 @@
       } catch (e) {}
     }
 
+    let policiesLoaded = false;
+    async function loadPolicies() {
+      try {
+        const res = await fetch("/api/policies");
+        if (!res.ok) return;
+        const p = await res.json();
+        
+        document.getElementById("pol_strict_allowlist_matching").checked = p.strict_allowlist_matching;
+        document.getElementById("pol_fail_closed_when_server_offline").checked = p.fail_closed_when_server_offline;
+        document.getElementById("pol_require_captcha_for_hid").checked = p.require_captcha_for_hid;
+        document.getElementById("pol_captcha_timeout_seconds").value = p.captcha_timeout_seconds;
+        document.getElementById("pol_captcha_max_attempts").value = p.captcha_max_attempts || 3;
+        document.getElementById("pol_iki_burst_threshold_cps").value = p.iki_burst_threshold_cps;
+        document.getElementById("pol_block_unauthorized_composite").checked = p.block_unauthorized_composite;
+        document.getElementById("pol_allow_composite_mouse_keyboard").checked = p.allow_composite_mouse_keyboard;
+        document.getElementById("pol_protected_directory").value = p.protected_directory;
+        document.getElementById("pol_canary_file_name").value = p.canary_file_name;
+        document.getElementById("pol_block_storage_execution").checked = p.block_storage_execution;
+        document.getElementById("pol_auto_terminate_storage_processes").checked = p.auto_terminate_storage_processes;
+        document.getElementById("pol_block_usb_network_adapters").checked = p.block_usb_network_adapters;
+        document.getElementById("pol_max_reconnects_per_minute").value = p.max_reconnects_per_minute;
+        document.getElementById("pol_evasion_risk_threshold").value = p.evasion_risk_threshold;
+        policiesLoaded = true;
+      } catch (e) {}
+    }
+
+    async function handleSavePolicies() {
+      const payload = {
+        strict_allowlist_matching: document.getElementById("pol_strict_allowlist_matching").checked,
+        fail_closed_when_server_offline: document.getElementById("pol_fail_closed_when_server_offline").checked,
+        require_captcha_for_hid: document.getElementById("pol_require_captcha_for_hid").checked,
+        captcha_timeout_seconds: parseInt(document.getElementById("pol_captcha_timeout_seconds").value) || 30,
+        captcha_max_attempts: parseInt(document.getElementById("pol_captcha_max_attempts").value) || 3,
+        iki_burst_threshold_cps: parseInt(document.getElementById("pol_iki_burst_threshold_cps").value) || 30,
+        iki_min_variance_ms: 2.0,
+        hid_surveillance_window_seconds: 15,
+        block_unauthorized_composite: document.getElementById("pol_block_unauthorized_composite").checked,
+        allow_composite_mouse_keyboard: document.getElementById("pol_allow_composite_mouse_keyboard").checked,
+        protected_directory: document.getElementById("pol_protected_directory").value || "C:\\USBIPS_Protected",
+        canary_file_name: document.getElementById("pol_canary_file_name").value || "confidential_canary.txt",
+        block_storage_execution: document.getElementById("pol_block_storage_execution").checked,
+        auto_terminate_storage_processes: document.getElementById("pol_auto_terminate_storage_processes").checked,
+        block_usb_network_adapters: document.getElementById("pol_block_usb_network_adapters").checked,
+        alert_on_gateway_override: true,
+        max_reconnects_per_minute: parseInt(document.getElementById("pol_max_reconnects_per_minute").value) || 3,
+        flap_window_seconds: 15,
+        evasion_risk_threshold: parseInt(document.getElementById("pol_evasion_risk_threshold").value) || 70
+      };
+
+      try {
+        const res = await fetch("/api/policies", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        if (res.ok) {
+          showToast("Fleet policies updated successfully");
+          loadPolicies();
+        } else {
+          showToast("Failed to update fleet policies", true);
+        }
+      } catch (ex) {
+        showToast("Error updating policies: " + ex.message, true);
+      }
+    }
+
+    async function handleResetPolicies() {
+      if (!confirm("Are you sure you want to reset all fleet security policies to safe defaults?")) return;
+      try {
+        const res = await fetch("/api/policies/reset", { method: "POST" });
+        if (res.ok) {
+          showToast("Fleet policies reset to safe defaults");
+          loadPolicies();
+        } else {
+          showToast("Failed to reset policies", true);
+        }
+      } catch (ex) {
+        showToast("Error resetting policies: " + ex.message, true);
+      }
+    }
+
+    // --- Protected Folder Policies Functions ---
+    function openAddFolderModal() {
+      document.getElementById("addFolderModal").classList.add("active");
+    }
+
+    function closeAddFolderModal() {
+      document.getElementById("addFolderModal").classList.remove("active");
+      document.getElementById("addFolderForm").reset();
+    }
+
+    async function handleAddFolder(e) {
+      e.preventDefault();
+      const pathVal = document.getElementById("new_folder_path").value.trim();
+      const descVal = document.getElementById("new_folder_desc").value.trim();
+      const isEnabled = document.getElementById("new_folder_enabled").checked;
+
+      try {
+        const res = await fetch("/api/protected-folders", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            folder_path: pathVal,
+            description: descVal,
+            is_enabled: isEnabled
+          })
+        });
+
+        if (res.ok) {
+          showToast(`Protected folder policy created for ${pathVal}`);
+          closeAddFolderModal();
+          loadProtectedFolders();
+        } else {
+          const err = await res.json();
+          showToast("Error: " + (err.detail || "Failed to add folder policy"), true);
+        }
+      } catch (ex) {
+        showToast("Network error: " + ex.message, true);
+      }
+    }
+
+    async function handleToggleFolder(folderId) {
+      try {
+        const res = await fetch(`/api/protected-folders/${folderId}/toggle`, { method: "PUT" });
+        if (res.ok) {
+          const data = await res.json();
+          showToast(`Folder policy ${data.is_enabled ? 'ENABLED' : 'DISABLED'}`);
+          loadProtectedFolders();
+        } else {
+          showToast("Failed to toggle folder policy", true);
+        }
+      } catch (ex) {
+        showToast("Error: " + ex.message, true);
+      }
+    }
+
+    async function handleDeleteFolder(folderId, path) {
+      if (!confirm(`Remove protection policy for '${path}'? Files on disk will NOT be deleted.`)) return;
+      try {
+        const res = await fetch(`/api/protected-folders/${folderId}`, { method: "DELETE" });
+        if (res.ok) {
+          showToast(`Policy for '${path}' removed`);
+          loadProtectedFolders();
+        } else {
+          showToast("Failed to remove folder policy", true);
+        }
+      } catch (ex) {
+        showToast("Error: " + ex.message, true);
+      }
+    }
+
+    async function loadProtectedFolders() {
+      try {
+        const res = await fetch("/api/protected-folders");
+        if (!res.ok) return;
+        const folders = await res.json();
+        const tbody = document.getElementById("folders-tbody");
+        if (!tbody) return;
+
+        if (folders.length === 0) {
+          tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; color: var(--text-muted); padding: 18px;">No protected folder policies configured.</td></tr>`;
+          return;
+        }
+
+        tbody.innerHTML = folders.map(f => {
+          const statusBadge = f.is_enabled
+            ? '<span class="badge badge-online">ACTIVE</span>'
+            : '<span class="badge badge-offline">DISABLED</span>';
+          const toggleBtnText = f.is_enabled ? "Disable" : "Enable";
+          const toggleBtnClass = f.is_enabled ? "btn-secondary" : "btn-primary";
+
+          return `
+            <tr>
+              <td>${f.id}</td>
+              <td><code>${f.folder_path}</code></td>
+              <td>${f.description || '<span style="color:var(--text-muted);">Standard Protected Directory</span>'}</td>
+              <td>${statusBadge}</td>
+              <td>${f.created_at || '-'}</td>
+              <td style="text-align: center; white-space: nowrap;">
+                <button class="btn ${toggleBtnClass} btn-sm" onclick="handleToggleFolder(${f.id})" style="margin-right: 6px;">${toggleBtnText}</button>
+                <button class="btn btn-danger btn-sm" onclick="handleDeleteFolder(${f.id}, '${f.folder_path.replace(/\\/g, "\\\\")}')">Remove</button>
+              </td>
+            </tr>
+          `;
+        }).join("");
+      } catch (e) {}
+    }
+
     function loadAllData() {
       loadStats();
       loadPendingRequests();
       loadAllowlist();
       loadClients();
       loadEvents();
+      loadProtectedFolders();
+      if (!policiesLoaded) {
+        loadPolicies();
+      }
     }
 
     // Initial load

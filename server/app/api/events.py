@@ -32,6 +32,7 @@ def ingest_batch_events(batch: BatchEventsRequest):
         "status": "success",
         "received": len(batch.events),
         "inserted": inserted_count,
+        "ingested_count": inserted_count,
         "timestamp": now
     }
 

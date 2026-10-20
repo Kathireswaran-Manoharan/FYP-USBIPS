@@ -109,6 +109,109 @@ def init_db():
             );
         """)
 
+        # 5. Central Security Policies Table (Algorithms 1-7)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS policies (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                strict_allowlist_matching INTEGER DEFAULT 1,
+                fail_closed_when_server_offline INTEGER DEFAULT 1,
+                require_captcha_for_hid INTEGER DEFAULT 1,
+                captcha_timeout_seconds INTEGER DEFAULT 30,
+                captcha_max_attempts INTEGER DEFAULT 3,
+                iki_burst_threshold_cps INTEGER DEFAULT 30,
+                iki_min_variance_ms REAL DEFAULT 2.0,
+                hid_surveillance_window_seconds INTEGER DEFAULT 15,
+                block_unauthorized_composite INTEGER DEFAULT 1,
+                allow_composite_mouse_keyboard INTEGER DEFAULT 1,
+                protected_directory TEXT DEFAULT 'C:\\USBIPS_Protected',
+                canary_file_name TEXT DEFAULT 'confidential_canary.txt',
+                block_storage_execution INTEGER DEFAULT 1,
+                auto_terminate_storage_processes INTEGER DEFAULT 1,
+                block_usb_network_adapters INTEGER DEFAULT 1,
+                alert_on_gateway_override INTEGER DEFAULT 1,
+                max_reconnects_per_minute INTEGER DEFAULT 3,
+                flap_window_seconds INTEGER DEFAULT 15,
+                evasion_risk_threshold INTEGER DEFAULT 70,
+                updated_at TEXT
+            );
+        """)
+
+        # Migration for existing database instances: ensure captcha_max_attempts column exists
+        cursor.execute("PRAGMA table_info(policies);")
+        policy_cols = [row[1] if isinstance(row, tuple) else row["name"] for row in cursor.fetchall()]
+        if "captcha_max_attempts" not in policy_cols:
+            cursor.execute("ALTER TABLE policies ADD COLUMN captcha_max_attempts INTEGER DEFAULT 3;")
+
+        # Insert default policy if not present
+        cursor.execute("SELECT COUNT(*) FROM policies WHERE id = 1;")
+        if cursor.fetchone()[0] == 0:
+            cursor.execute("""
+                INSERT INTO policies (id, updated_at) VALUES (1, datetime('now'));
+            """)
+
+        # 6. Protected Folder Policies Table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS protected_folder_policies (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                folder_path TEXT NOT NULL UNIQUE,
+                description TEXT DEFAULT '',
+                is_enabled INTEGER DEFAULT 1,
+                created_at TEXT,
+                updated_at TEXT
+            );
+        """)
+
+        # Seed default protected folder if table is empty
+        cursor.execute("SELECT COUNT(*) FROM protected_folder_policies;")
+        if cursor.fetchone()[0] == 0:
+            default_now = utc_now_iso()
+            cursor.execute("""
+                INSERT INTO protected_folder_policies (folder_path, description, is_enabled, created_at, updated_at)
+                VALUES ('C:\\USBIPS_Protected', 'Default Sentinel Quarantine Folder', 1, ?, ?);
+            """, (default_now, default_now))
+
+        # Migrations for pending_requests
+        cursor.execute("PRAGMA table_info(pending_requests);")
+        req_cols = [row[1] if isinstance(row, tuple) else row["name"] for row in cursor.fetchall()]
+        pending_migrations = [
+            ("session_id", "TEXT"),
+            ("captcha_challenge_id", "TEXT"),
+            ("captcha_result", "TEXT"),
+            ("verification_method", "TEXT"),
+            ("verification_start", "TEXT"),
+            ("verification_completed", "TEXT"),
+            ("attempt_count", "INTEGER DEFAULT 0"),
+            ("verification_score", "INTEGER DEFAULT 0"),
+            ("verification_duration_seconds", "REAL DEFAULT 0.0"),
+            ("temp_release_applied", "INTEGER DEFAULT 0"),
+            ("temp_release_duration_seconds", "REAL DEFAULT 0.0"),
+            ("re_quarantine_result", "TEXT"),
+            ("current_enforcement_state", "TEXT"),
+            ("total_risk_score", "INTEGER DEFAULT 0"),
+            ("severity", "TEXT"),
+            ("recommendation", "TEXT"),
+            ("assessment_summary", "TEXT"),
+            ("algorithms_json", "TEXT"),
+            ("duration_minutes", "INTEGER"),
+            ("expires_at", "TEXT"),
+            ("decision_reason", "TEXT")
+        ]
+        for col_name, col_type in pending_migrations:
+            if col_name not in req_cols:
+                cursor.execute(f"ALTER TABLE pending_requests ADD COLUMN {col_name} {col_type};")
+
+        # Migrations for master_allowlist
+        cursor.execute("PRAGMA table_info(master_allowlist);")
+        allow_cols = [row[1] if isinstance(row, tuple) else row["name"] for row in cursor.fetchall()]
+        allow_migrations = [
+            ("duration_minutes", "INTEGER"),
+            ("expires_at", "TEXT"),
+            ("decision_reason", "TEXT")
+        ]
+        for col_name, col_type in allow_migrations:
+            if col_name not in allow_cols:
+                cursor.execute(f"ALTER TABLE master_allowlist ADD COLUMN {col_name} {col_type};")
+
         # Indices
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_req_status ON pending_requests(status);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_allowlist_tuple ON master_allowlist(vendor_id, product_id, serial_number);")

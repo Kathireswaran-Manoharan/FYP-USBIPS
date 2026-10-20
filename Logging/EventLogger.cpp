@@ -362,15 +362,7 @@ std::vector<SecurityEvent> EventLogger::GetRecentEvents(int limit)
         evt.timestamp = getCol(2);
 
         std::wstring typeStr = getCol(3);
-        if (typeStr == L"DEVICE_CONNECTED") evt.eventType = SecurityEventType::DEVICE_CONNECTED;
-        else if (typeStr == L"DEVICE_QUARANTINED") evt.eventType = SecurityEventType::DEVICE_QUARANTINED;
-        else if (typeStr == L"DEVICE_RELEASED") evt.eventType = SecurityEventType::DEVICE_RELEASED;
-        else if (typeStr == L"DEVICE_REMOVED") evt.eventType = SecurityEventType::DEVICE_REMOVED;
-        else if (typeStr == L"ALLOWLIST_MATCH") evt.eventType = SecurityEventType::ALLOWLIST_MATCH;
-        else if (typeStr == L"UNKNOWN_DEVICE") evt.eventType = SecurityEventType::UNKNOWN_DEVICE;
-        else if (typeStr == L"USER_APPROVED") evt.eventType = SecurityEventType::USER_APPROVED;
-        else if (typeStr == L"USER_REJECTED") evt.eventType = SecurityEventType::USER_REJECTED;
-        else if (typeStr == L"DEVICE_BLOCKED") evt.eventType = SecurityEventType::DEVICE_BLOCKED;
+        evt.eventType = StringToSecurityEventType(typeStr);
 
         evt.vendorId = getCol(4);
         evt.productId = getCol(5);
@@ -430,15 +422,7 @@ std::vector<SecurityEvent> EventLogger::GetPendingSyncEvents(int limit)
         evt.timestamp = getCol(2);
 
         std::wstring typeStr = getCol(3);
-        if (typeStr == L"DEVICE_CONNECTED") evt.eventType = SecurityEventType::DEVICE_CONNECTED;
-        else if (typeStr == L"DEVICE_QUARANTINED") evt.eventType = SecurityEventType::DEVICE_QUARANTINED;
-        else if (typeStr == L"DEVICE_RELEASED") evt.eventType = SecurityEventType::DEVICE_RELEASED;
-        else if (typeStr == L"DEVICE_REMOVED") evt.eventType = SecurityEventType::DEVICE_REMOVED;
-        else if (typeStr == L"ALLOWLIST_MATCH") evt.eventType = SecurityEventType::ALLOWLIST_MATCH;
-        else if (typeStr == L"UNKNOWN_DEVICE") evt.eventType = SecurityEventType::UNKNOWN_DEVICE;
-        else if (typeStr == L"USER_APPROVED") evt.eventType = SecurityEventType::USER_APPROVED;
-        else if (typeStr == L"USER_REJECTED") evt.eventType = SecurityEventType::USER_REJECTED;
-        else if (typeStr == L"DEVICE_BLOCKED") evt.eventType = SecurityEventType::DEVICE_BLOCKED;
+        evt.eventType = StringToSecurityEventType(typeStr);
 
         evt.vendorId = getCol(4);
         evt.productId = getCol(5);

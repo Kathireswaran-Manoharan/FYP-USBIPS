@@ -50,6 +50,11 @@ public:
         DeviceTrackingState state
     );
 
+    static bool GetDeviceState(
+        const std::wstring& deviceId,
+        DeviceTrackingState& outState
+    );
+
     static void UntrackDevice(
         const std::wstring& deviceId
     );

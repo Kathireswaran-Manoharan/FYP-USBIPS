@@ -1,5 +1,9 @@
 #pragma once
 
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <winsock2.h>
 #include <windows.h>
 #include <string>
 #include <vector>
@@ -9,6 +13,9 @@
 #include "../Models/SecurityEvent.h"
 #include "../Allowlist/AllowlistManager.h"
 
+struct TrustAssessmentReport;
+struct HIDVerificationResult;
+
 struct DeviceCheckResult
 {
     bool success = false;
@@ -17,6 +24,8 @@ struct DeviceCheckResult
     std::wstring requestId;     // Server UUID
     std::wstring requestStatus; // "PENDING", "APPROVED", "DECLINED"
     std::wstring message;
+    int durationMinutes = 0;
+    std::wstring expiresAt;
 };
 
 class RestClient
@@ -50,7 +59,9 @@ public:
 
     DeviceCheckResult CheckOrRequestDevice(
         const std::wstring& clientId,
-        const USBDevice& device
+        const USBDevice& device,
+        const struct TrustAssessmentReport* pReport = nullptr,
+        const struct HIDVerificationResult* pHidVerification = nullptr
     );
 
     DeviceCheckResult PollRequestStatus(
@@ -61,9 +72,29 @@ public:
         std::vector<AllowedDevice>& outDevices
     );
 
+    bool FetchPolicyConfig(
+        struct PolicyConfig& outConfig
+    );
+
     bool UploadEventsBatch(
         const std::vector<SecurityEvent>& events,
         int& outIngestedCount
+    );
+
+    bool FetchProtectedFolderPolicies(
+        std::vector<struct ProtectedFolder>& outFolders
+    );
+
+    bool ReportPolicyViolation(
+        const struct PolicyViolationIncident& incident
+    );
+
+    bool RecoverDevice(
+        const std::wstring& vid,
+        const std::wstring& pid,
+        const std::wstring& serial,
+        const std::wstring& reason = L"Administrator cleared unverified scan error revocation",
+        bool forceOverride = false
     );
 
     static std::string WideToUtf8(const std::wstring& wstr);

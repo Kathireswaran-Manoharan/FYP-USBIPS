@@ -20,7 +20,8 @@ bool DeviceInfoExtractor::ExtractVidPid(
     std::wstring& pid)
 {
     std::wregex pattern(
-        L"VID_([0-9A-Fa-f]{4})&PID_([0-9A-Fa-f]{4})"
+        L"VID_([0-9A-Fa-f]{4})&PID_([0-9A-Fa-f]{4})",
+        std::regex_constants::icase
     );
 
     std::wsmatch match;
@@ -32,6 +33,9 @@ bool DeviceInfoExtractor::ExtractVidPid(
     {
         vid = match[1].str();
         pid = match[2].str();
+
+        for (auto& c : vid) c = towupper(c);
+        for (auto& c : pid) c = towupper(c);
 
         return true;
     }
@@ -241,6 +245,32 @@ static std::wstring GetDeviceProperty(
                 buffer.data()
                 )
         );
+    }
+    else if (dataType == REG_MULTI_SZ)
+    {
+        std::wstring result;
+        const wchar_t* p = reinterpret_cast<const wchar_t*>(buffer.data());
+        size_t totalWChars = requiredSize / sizeof(wchar_t);
+        size_t idx = 0;
+
+        while (idx < totalWChars && p[idx] != L'\0')
+        {
+            size_t len = 0;
+            while (idx + len < totalWChars && p[idx + len] != L'\0')
+            {
+                len++;
+            }
+            if (len > 0)
+            {
+                if (!result.empty())
+                {
+                    result += L"; ";
+                }
+                result.append(&p[idx], len);
+            }
+            idx += len + 1;
+        }
+        return result;
     }
 
     return L"";

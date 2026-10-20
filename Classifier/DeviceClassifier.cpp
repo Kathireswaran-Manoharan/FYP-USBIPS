@@ -9,6 +9,8 @@
 
 #pragma comment(lib, "cfgmgr32.lib")
 
+static std::wstring ToUpper(std::wstring value);
+
 
 // ============================================================
 // Convert DeviceType to text
@@ -28,9 +30,40 @@ const wchar_t* DeviceClassifier::ToString(
     case DeviceType::NETWORK:
         return L"NETWORK";
 
+    case DeviceType::COMPOSITE:
+        return L"COMPOSITE";
+
     default:
         return L"OTHER";
     }
+}
+
+std::wstring DeviceClassifier::GetSpecificTypeString(
+    const USBDevice& device)
+{
+    std::wstring desc = ToUpper(device.description);
+    // If device description or primary capability indicates Mouse:
+    if (device.hasMouse && (desc.find(L"KEYBOARD") == std::wstring::npos || desc.find(L"MOUSE") != std::wstring::npos || desc.find(L"POINTING") != std::wstring::npos || desc.find(L"TRACKBALL") != std::wstring::npos))
+    {
+        return L"MOUSE";
+    }
+    if (device.hasKeyboard && (desc.find(L"MOUSE") == std::wstring::npos || desc.find(L"KEYBOARD") != std::wstring::npos))
+    {
+        return L"KEYBOARD";
+    }
+    if (device.hasMouse)
+    {
+        return L"MOUSE";
+    }
+    if (device.hasKeyboard)
+    {
+        return L"KEYBOARD";
+    }
+    if (device.hasHID)
+    {
+        return L"HID";
+    }
+    return ToString(device.type);
 }
 
 
@@ -186,6 +219,46 @@ static bool IsHIDClass(
     }
 
 
+    return false;
+}
+
+
+// ============================================================
+// Determine whether a devnode represents a Keyboard
+// ============================================================
+
+static bool IsKeyboardClass(
+    const std::wstring& className,
+    const std::wstring& deviceId,
+    const std::wstring& service)
+{
+    std::wstring cls = ToUpper(className);
+    std::wstring id = ToUpper(deviceId);
+    std::wstring svc = ToUpper(service);
+
+    if (cls == L"KEYBOARD") return true;
+    if (svc == L"KBDHID" || svc == L"KBDCLASS" || svc == L"IHVCKBD") return true;
+    if (id.find(L"\\KBD") != std::wstring::npos || id.find(L"KEYBOARD") != std::wstring::npos) return true;
+    return false;
+}
+
+
+// ============================================================
+// Determine whether a devnode represents a Mouse
+// ============================================================
+
+static bool IsMouseClass(
+    const std::wstring& className,
+    const std::wstring& deviceId,
+    const std::wstring& service)
+{
+    std::wstring cls = ToUpper(className);
+    std::wstring id = ToUpper(deviceId);
+    std::wstring svc = ToUpper(service);
+
+    if (cls == L"MOUSE") return true;
+    if (svc == L"MOUHID" || svc == L"MOUCLASS") return true;
+    if (id.find(L"\\MOU") != std::wstring::npos || id.find(L"MOUSE") != std::wstring::npos) return true;
     return false;
 }
 
@@ -355,6 +428,32 @@ static void AnalyzeDevNode(
         deviceId,
         service))
     {
+        device.hasHID = true;
+    }
+
+    if (IsKeyboardClass(className, deviceId, service))
+    {
+        device.hasKeyboard = true;
+        device.hasHID = true;
+    }
+
+    if (IsMouseClass(className, deviceId, service))
+    {
+        device.hasMouse = true;
+        device.hasHID = true;
+    }
+
+    std::wstring devDesc = ToUpper(GetDevNodeProperty(devInst, CM_DRP_DEVICEDESC));
+    std::wstring friendlyName = ToUpper(GetDevNodeProperty(devInst, CM_DRP_FRIENDLYNAME));
+    if (devDesc.find(L"KEYBOARD") != std::wstring::npos || friendlyName.find(L"KEYBOARD") != std::wstring::npos)
+    {
+        device.hasKeyboard = true;
+        device.hasHID = true;
+    }
+    if (devDesc.find(L"MOUSE") != std::wstring::npos || friendlyName.find(L"MOUSE") != std::wstring::npos ||
+        devDesc.find(L"POINTING") != std::wstring::npos)
+    {
+        device.hasMouse = true;
         device.hasHID = true;
     }
 
@@ -532,6 +631,12 @@ bool DeviceClassifier::Classify(
     device.hasHID =
         false;
 
+    device.hasKeyboard =
+        false;
+
+    device.hasMouse =
+        false;
+
     device.hasStorage =
         false;
 
@@ -543,9 +648,43 @@ bool DeviceClassifier::Classify(
 
     // Analyze Windows device tree
 
-    if (!AnalyzeDeviceTree(device))
+    AnalyzeDeviceTree(device);
+
+    // Fallback classification from device description and hardware IDs
+    std::wstring descUpper = ToUpper(device.description);
+    if (descUpper.find(L"MOUSE") != std::wstring::npos || 
+        descUpper.find(L"POINTING") != std::wstring::npos ||
+        descUpper.find(L"TRACKBALL") != std::wstring::npos ||
+        descUpper.find(L"TOUCHPAD") != std::wstring::npos)
     {
-        return false;
+        device.hasMouse = true;
+        device.hasHID = true;
+        // If device description explicitly indicates a mouse, suppress spurious child keyboard flags
+        // (common in gaming/multimedia mice with consumer-control macro buttons or secondary kbdhid endpoints)
+        if (descUpper.find(L"KEYBOARD") == std::wstring::npos)
+        {
+            device.hasKeyboard = false;
+        }
+    }
+    else if (descUpper.find(L"KEYBOARD") != std::wstring::npos)
+    {
+        device.hasKeyboard = true;
+        device.hasHID = true;
+        if (descUpper.find(L"MOUSE") == std::wstring::npos)
+        {
+            device.hasMouse = false;
+        }
+    }
+
+    if (descUpper.find(L"MASS STORAGE") != std::wstring::npos ||
+        descUpper.find(L"FLASH DISK") != std::wstring::npos ||
+        descUpper.find(L"USB DISK") != std::wstring::npos ||
+        descUpper.find(L"STORAGE") != std::wstring::npos ||
+        descUpper.find(L"PENDRIVE") != std::wstring::npos ||
+        descUpper.find(L"CRUISER") != std::wstring::npos ||
+        descUpper.find(L"CRUZER") != std::wstring::npos)
+    {
+        device.hasStorage = true;
     }
 
 
@@ -583,10 +722,14 @@ bool DeviceClassifier::Classify(
                 DeviceType::NETWORK;
         }
     }
+    else if (capabilityCount > 1)
+    {
+        device.type =
+            DeviceType::COMPOSITE;
+    }
     else
     {
-        // Multiple capabilities or none
-
+        // No capabilities detected
         device.type =
             DeviceType::OTHER;
     }

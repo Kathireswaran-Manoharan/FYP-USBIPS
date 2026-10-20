@@ -179,6 +179,28 @@ void DevicePresenceMonitor::SetDeviceState(
             return;
         }
     }
+
+    TrackedDevice tracked;
+    tracked.deviceId = deviceId;
+    tracked.state = state;
+    tracked.trackingStart = std::chrono::steady_clock::now();
+    g_trackedDevices.push_back(tracked);
+}
+
+bool DevicePresenceMonitor::GetDeviceState(
+    const std::wstring& deviceId,
+    DeviceTrackingState& outState)
+{
+    std::lock_guard<std::mutex> lock(g_mutex);
+    for (const auto& d : g_trackedDevices)
+    {
+        if (d.deviceId == deviceId)
+        {
+            outState = d.state;
+            return true;
+        }
+    }
+    return false;
 }
 
 
@@ -196,8 +218,14 @@ std::vector<TrackedDevice> DevicePresenceMonitor::GetTrackedDevices()
 bool DevicePresenceMonitor::IsDevicePresent(
     const std::wstring& deviceId)
 {
+    if (deviceId.empty())
+    {
+        return false;
+    }
+
     DEVINST devInst = 0;
 
+    // 1. Check for active/started devnode in hardware tree
     CONFIGRET result =
         CM_Locate_DevNodeW(
             &devInst,
@@ -207,7 +235,34 @@ bool DevicePresenceMonitor::IsDevicePresent(
             CM_LOCATE_DEVNODE_NORMAL
         );
 
-    return result == CR_SUCCESS;
+    if (result == CR_SUCCESS)
+    {
+        return true;
+    }
+
+    // 2. If devnode was disabled/quarantined by policy, CM_LOCATE_DEVNODE_NORMAL may fail.
+    // Locate with CM_LOCATE_DEVNODE_PHANTOM and check hardware attachment via CM_Get_DevNode_Status.
+    // When physically attached (even if disabled with CM_PROB_DISABLED), CM_Get_DevNode_Status returns CR_SUCCESS.
+    // When physically disconnected, CM_Get_DevNode_Status returns CR_NO_SUCH_DEVINST.
+    result =
+        CM_Locate_DevNodeW(
+            &devInst,
+            const_cast<DEVINSTID_W>(
+                deviceId.c_str()
+                ),
+            CM_LOCATE_DEVNODE_PHANTOM
+        );
+
+    if (result != CR_SUCCESS)
+    {
+        return false;
+    }
+
+    ULONG status = 0;
+    ULONG problem = 0;
+    CONFIGRET statusResult = CM_Get_DevNode_Status(&status, &problem, devInst, 0);
+
+    return (statusResult == CR_SUCCESS);
 }
 
 
