@@ -925,14 +925,22 @@ void TrustAssessmentEngine::UpdateMalwareScanResult(
                 ++cIt;
         }
     }
+    else if (scanResult.status == ScanStatus::SCANNING)
+    {
+        m4.status = AssessmentStatus::NOT_ASSESSED;
+        m4.riskWeight = 5;
+        m4.evidence = scanResult.details.empty() ? L"Antivirus inspection in progress." : scanResult.details;
+        m4.isCritical = false;
+        report.malwareScanResult = L"SCANNING";
+    }
     else if (scanResult.status == ScanStatus::DETECTED)
     {
         m4.status = AssessmentStatus::FAIL;
         m4.riskWeight = 60;
         m4.evidence = L"MALWARE DETECTED: " + scanResult.threatName + L" (" + scanResult.details + L")";
         m4.isCritical = true;
-        report.malwareScanResult = L"DETECTED";
-        report.exactThreatEvidence = scanResult.details;
+        report.malwareScanResult = L"INFECTED";
+        report.exactThreatEvidence = scanResult.details.empty() ? (L"Malware threat signature: " + scanResult.threatName) : scanResult.details;
         report.exactThreatFile = scanResult.targetPath;
         report.criticalViolations.push_back(L"[A4-CRITICAL] Malware signature detected: " + scanResult.threatName);
         report.explainableReasons.push_back(L"[A4] Malware threat identified by antivirus engine (+60 risk)");
@@ -1072,7 +1080,7 @@ void TrustAssessmentEngine::UpdateExecutablePolicyResult(
         m6.evidence = inspectionResult.policyRule + L": " + inspectionResult.primaryProhibitedFile;
         m6.isCritical = true;
         report.executablePolicyStatus = L"BLOCKED";
-        report.exactThreatEvidence = inspectionResult.policyRule;
+        report.exactThreatEvidence = inspectionResult.policyRule + L": " + inspectionResult.primaryProhibitedFile;
         report.exactThreatFile = inspectionResult.primaryProhibitedFile;
         report.criticalViolations.push_back(L"[A6-CRITICAL] " + inspectionResult.policyRule + L": " + inspectionResult.primaryProhibitedFile);
         report.explainableReasons.push_back(L"[A6] " + inspectionResult.policyRule + L" (+45 risk)");

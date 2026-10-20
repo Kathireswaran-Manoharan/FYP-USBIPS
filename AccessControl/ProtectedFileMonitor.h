@@ -70,6 +70,8 @@ public:
     // Set the current USB device context for event correlation
     void SetActiveDevice(const USBDevice& device);
     void ClearActiveDevice();
+    bool HasActiveDevice() const;
+    USBDevice GetActiveDevice() const;
 
     // Allowlist manager reference for immediate local revocation upon confirmed violation
     void SetAllowlistManager(AllowlistManager* allowlist);
@@ -88,6 +90,31 @@ public:
     // Testing & Simulation routine
     void TriggerSimulatedViolation(const std::wstring& folderPath, const std::wstring& operation, const std::wstring& attributionTier);
 
+    // ============================================================
+    // OS-Level Protected-Folder Access Restrictions
+    // ============================================================
+
+    // Physical USB arrival / removal lifecycle hooks
+    void OnUsbDeviceConnected(const USBDevice& device);
+    void OnUsbDeviceDisconnected(const std::wstring& devicePath);
+
+    // Explicit enforcement controls (NTFS DACL Security Enforcement)
+    bool ActivateEnforcement(const USBDevice* triggeringDevice = nullptr);
+    bool DeactivateEnforcement(const USBDevice* triggeringDevice = nullptr);
+    bool IsEnforcementActive() const;
+
+    // Active USB device count tracked by monitor
+    int GetActiveUsbDeviceCount() const;
+
+    // Module A7 self-test diagnostic check
+    bool VerifySelfTest();
+
+    // Direct folder protection helpers (applies/restores native Windows NTFS Deny ACEs)
+    static bool EnforceNativeFolderProtection(const std::wstring& folderPath, const std::wstring& userName, std::wstring& outOriginalSddl);
+    static bool RestoreNativeFolderProtection(const std::wstring& folderPath, const std::wstring& originalSddl);
+    static bool RevokeUserDenyAce(const std::wstring& folderPath, const std::wstring& userName);
+    static std::wstring GetCurrentUserNameStr();
+
 private:
     ProtectedFileMonitor();
     ~ProtectedFileMonitor();
@@ -104,7 +131,7 @@ private:
     std::wstring        m_canaryPath;
     std::wstring        m_canaryFileName;
     std::thread         m_thread;
-    std::mutex          m_mutex;
+    mutable std::mutex  m_mutex;
     std::atomic<bool>   m_running;
 
     HANDLE              m_hStopEvent = nullptr;
@@ -119,4 +146,10 @@ private:
     std::atomic<bool>            m_canaryAccessCorrelated{false};
     std::chrono::steady_clock::time_point m_lastCanaryAccessTime;
     std::map<std::wstring, std::chrono::steady_clock::time_point> m_recentFileAlerts;
+
+    // OS-level NTFS enforcement state
+    std::atomic<bool>            m_isEnforcementActive{false};
+    std::map<std::wstring, std::wstring> m_savedFolderSddls;
+    std::map<std::wstring, USBDevice>    m_connectedUsbDevices;
+    int                          m_activeUsbDeviceCount = 0;
 };

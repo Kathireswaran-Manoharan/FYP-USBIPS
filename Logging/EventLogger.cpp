@@ -247,6 +247,20 @@ bool EventLogger::LogEvent(
         return false;
     }
 
+    // Deduplicate repeated identical pending inspection events within 5 seconds
+    auto now = std::chrono::steady_clock::now();
+    if (m_lastDeviceId == device.deviceId &&
+        m_lastType == type &&
+        m_lastReason == reason &&
+        std::chrono::duration_cast<std::chrono::seconds>(now - m_lastLogTime).count() < 5)
+    {
+        return true;
+    }
+    m_lastDeviceId = device.deviceId;
+    m_lastType = type;
+    m_lastReason = reason;
+    m_lastLogTime = now;
+
     SecurityEvent evt;
     evt.eventId = GenerateEventId();
     evt.clientId = m_clientId;
@@ -294,6 +308,20 @@ bool EventLogger::LogSimpleEvent(
     {
         return false;
     }
+
+    std::wstring devKey = deviceId.empty() ? devicePath : deviceId;
+    auto now = std::chrono::steady_clock::now();
+    if (m_lastDeviceId == devKey &&
+        m_lastType == type &&
+        m_lastReason == reason &&
+        std::chrono::duration_cast<std::chrono::seconds>(now - m_lastLogTime).count() < 5)
+    {
+        return true;
+    }
+    m_lastDeviceId = devKey;
+    m_lastType = type;
+    m_lastReason = reason;
+    m_lastLogTime = now;
 
     SecurityEvent evt;
     evt.eventId = GenerateEventId();

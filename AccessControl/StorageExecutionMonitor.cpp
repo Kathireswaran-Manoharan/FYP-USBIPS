@@ -6,6 +6,10 @@
 #include "../Allowlist/AllowlistManager.h"
 #include "../Presence/DevicePresenceMonitor.h"
 #include "../Network/RestClient.h"
+#include "TrustAssessmentEngine.h"
+#include "MalwareScanner.h"
+#include "ProtectedFileMonitor.h"
+#include "SuspiciousFileDetector.h"
 
 #include <tlhelp32.h>
 #include <winioctl.h>
@@ -933,3 +937,440 @@ bool StorageExecutionMonitor::VerifySelfTest()
 
     return (!systemDriveBlocked && deviceRevokedFromAllowlist);
 }
+
+// ============================================================
+// Pre-Release Storage Media Inspection Implementation
+// ============================================================
+
+bool InspectStorageMedia(const USBDevice& device, int maxWaitMs)
+{
+    if (!device.hasStorage) return true;
+
+    // Attribute exact drive letters belonging specifically to this USB device
+    auto mappedDrives = StorageExecutionMonitor::Instance().GetDriveLettersForDevice(device);
+    if (mappedDrives.empty())
+    {
+        std::wcout << L"[A6-EXEC] Waiting for filesystem volume to mount for " << device.deviceId << L"...\n";
+        int maxAttempts = maxWaitMs / 500;
+        if (maxAttempts < 1) maxAttempts = 1;
+        for (int retry = 1; retry <= maxAttempts && mappedDrives.empty(); ++retry)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            mappedDrives = StorageExecutionMonitor::Instance().GetDriveLettersForDevice(device);
+            if (!mappedDrives.empty())
+            {
+                std::wcout << L"[A6-EXEC] Volume mounted after " << (retry * 500) << L"ms: " << mappedDrives.front() << L"\n";
+                break;
+            }
+        }
+    }
+
+    if (mappedDrives.empty())
+    {
+        std::wcout << L"[A6-EXEC] Volume mount wait timed out (" << (maxWaitMs / 1000) << L"s) for " << device.deviceId
+                   << L". Executable policy status: NOT_SCANNED (pending filesystem mount).\n";
+
+        StorageExecutableInspectionResult unmountedRes;
+        unmountedRes.status = StorageExecutableInspectionResult::Status::NOT_MOUNTED;
+        unmountedRes.failureReason = L"Filesystem volume mount timed out after " + std::to_wstring(maxWaitMs / 1000) + L"s; device restricted pending volume mount.";
+        TrustAssessmentEngine::Instance().UpdateExecutablePolicyResult(device, unmountedRes);
+
+        ScanResult pendingRes;
+        pendingRes.status = ScanStatus::NOT_SCANNED;
+        pendingRes.details = L"Volume mount wait timed out; pending filesystem mount.";
+        TrustAssessmentEngine::Instance().UpdateMalwareScanResult(device, pendingRes);
+
+        CONFIGRET qCr = CR_FAILURE;
+        EnforcementManager::QuarantineDevice(device, &qCr);
+
+        EventLogger::Instance().LogEvent(
+            SecurityEventType::DEVICE_BLOCKED,
+            device,
+            L"RESTRICTED",
+            L"[A6-EXEC] Storage device restricted: volume mount timed out; inspection pending"
+        );
+        return false;
+    }
+
+    for (const auto& drive : mappedDrives)
+    {
+        // 1. Prohibited executable detection on storage media (.exe, .com, etc.)
+        if (PolicyConfig::Instance().blockStorageExecution)
+        {
+            std::wcout << L"[A6-EXEC] Enumerate files and inspect executable policy on " << drive << L"...\n";
+            StorageExecutableInspectionResult execRes =
+                StorageExecutionMonitor::Instance().InspectVolumeForProhibitedExecutables(drive);
+
+            if (execRes.status == StorageExecutableInspectionResult::Status::PROHIBITED_FOUND)
+            {
+                std::wcout << L"[A6-EXEC] *** PROHIBITED EXECUTABLE DETECTED ON " << drive << L" ***\n"
+                           << L"[A6-EXEC] File Path: " << execRes.primaryProhibitedFile << L"\n"
+                           << L"[A6-EXEC] Policy   : " << execRes.policyRule << L"\n"
+                           << L"[A6-EXEC] Device   : " << device.deviceId << L"\n";
+
+                EventLogger::Instance().LogEvent(
+                    SecurityEventType::STORAGE_EXECUTION_BLOCKED,
+                    device,
+                    L"BLOCK",
+                    L"[A6-EXEC] " + execRes.policyRule + L": " + execRes.primaryProhibitedFile
+                );
+
+                // Update TAE which will enforce critical threat quarantine, verify disablement, revoke allowlist, and report to server
+                TrustAssessmentEngine::Instance().UpdateExecutablePolicyResult(device, execRes);
+                return false;
+            }
+            else if (execRes.status == StorageExecutableInspectionResult::Status::FAILED)
+            {
+                std::wcerr << L"[A6-EXEC] File enumeration failed on " << drive << L": " << execRes.failureReason << L"\n"
+                           << L"[A6-EXEC] Device restricted pending successful scan.\n";
+
+                TrustAssessmentEngine::Instance().UpdateExecutablePolicyResult(device, execRes);
+                CONFIGRET qCr = CR_FAILURE;
+                EnforcementManager::QuarantineDevice(device, &qCr);
+                EventLogger::Instance().LogEvent(
+                    SecurityEventType::DEVICE_BLOCKED,
+                    device,
+                    L"RESTRICTED",
+                    L"[A6-EXEC] File enumeration failed on storage volume: " + execRes.failureReason
+                );
+                return false;
+            }
+            else if (execRes.status == StorageExecutableInspectionResult::Status::NOT_MOUNTED)
+            {
+                std::wcerr << L"[A6-EXEC] Storage volume not mounted or inaccessible: " << drive << L"\n";
+                TrustAssessmentEngine::Instance().UpdateExecutablePolicyResult(device, execRes);
+                CONFIGRET qCr = CR_FAILURE;
+                EnforcementManager::QuarantineDevice(device, &qCr);
+                EventLogger::Instance().LogEvent(
+                    SecurityEventType::DEVICE_BLOCKED,
+                    device,
+                    L"RESTRICTED",
+                    L"[A6-EXEC] Volume inaccessible for executable policy check: " + drive
+                );
+                return false;
+            }
+            else // CLEAN
+            {
+                std::wcout << L"[A6-EXEC] Executable policy inspection CLEAN on " << drive
+                           << L" (0 prohibited .exe/.com files found).\n";
+                TrustAssessmentEngine::Instance().UpdateExecutablePolicyResult(device, execRes);
+            }
+        }
+
+        // 2. Removable-Media Antivirus Malware Scanning (Module A4)
+        if (PolicyConfig::Instance().enableAntivirusScanning)
+        {
+            std::wcout << L"[A4-AV] Initiating antivirus inspection for mapped drive " << drive << L"...\n";
+            ScanResult sRes = MalwareScanner::Instance().ScanPath(drive);
+
+            // Freshness check: reject stale scanner evidence
+            if (!MalwareScanner::Instance().IsScanResultFresh(sRes, 60))
+            {
+                std::wcerr << L"[A4-AV] Antivirus result is stale (>60s); rejecting evidence for current device.\n";
+                sRes.status = ScanStatus::FAILED;
+                sRes.details = L"Scanner evidence rejected: timestamp is stale.";
+            }
+
+            if (sRes.status == ScanStatus::DETECTED)
+            {
+                std::wcout << L"[A4-AV] *** CONFIRMED MALWARE DETECTED ON " << drive << L" ***\n"
+                           << L"[A4-AV] Threat Name : " << sRes.threatName << L"\n"
+                           << L"[A4-AV] Target File : " << sRes.targetPath << L"\n"
+                           << L"[A4-AV] Exact Device: " << device.deviceId << L"\n";
+
+                EventLogger::Instance().LogEvent(
+                    SecurityEventType::MALWARE_DETECTED,
+                    device,
+                    L"BLOCK",
+                    L"[A4-AV] Threat detected on removable storage " + drive + L": " + sRes.threatName
+                );
+
+                // Update TAE which will enforce critical threat quarantine and revocation
+                TrustAssessmentEngine::Instance().UpdateMalwareScanResult(device, sRes);
+                return false;
+            }
+            else if (sRes.status == ScanStatus::CLEAN)
+            {
+                std::wcout << L"[A4-AV] Antivirus scan completed CLEAN on " << drive << L" (0 threats detected).\n";
+                TrustAssessmentEngine::Instance().UpdateMalwareScanResult(device, sRes);
+            }
+            else
+            {
+                std::wcout << L"[A4-AV] Antivirus scan status on " << drive << L": "
+                           << ScanStatusToString(sRes.status) << L" (" << sRes.details << L")\n";
+                TrustAssessmentEngine::Instance().UpdateMalwareScanResult(device, sRes);
+                CONFIGRET qCr = CR_FAILURE;
+                EnforcementManager::QuarantineDevice(device, &qCr);
+                EventLogger::Instance().LogEvent(
+                    SecurityEventType::DEVICE_BLOCKED,
+                    device,
+                    L"RESTRICTED",
+                    L"[A4-AV] Storage device held restricted: scan incomplete or failed (" + sRes.details + L")"
+                );
+                return false;
+            }
+        }
+
+        // 3. Suspicious File & Script Detection (Module A5)
+        if (PolicyConfig::Instance().enableSuspiciousFileScan)
+        {
+            FileInspectionReport fRep = SuspiciousFileDetector::Instance().InspectDirectory(drive);
+            if (fRep.overallRisk == FileRiskLevel::MALICIOUS)
+            {
+                EventLogger::Instance().LogEvent(
+                    SecurityEventType::SUSPICIOUS_FILE_DETECTED,
+                    device,
+                    L"BLOCK",
+                    L"[A5-FILE] " + fRep.summary
+                );
+                TrustAssessmentEngine::Instance().UpdateAssessmentWithEvent(
+                    device,
+                    SecurityEventType::SUSPICIOUS_FILE_DETECTED,
+                    L"Malicious disguised files detected: " + fRep.summary
+                );
+                CONFIGRET qCr = CR_FAILURE;
+                EnforcementManager::QuarantineDevice(device, &qCr);
+                return false;
+            }
+            else if (fRep.overallRisk == FileRiskLevel::SUSPICIOUS)
+            {
+                EventLogger::Instance().LogEvent(
+                    SecurityEventType::SUSPICIOUS_FILE_DETECTED,
+                    device,
+                    L"ASK",
+                    L"[A5-FILE] " + fRep.summary
+                );
+            }
+        }
+    }
+
+    return true;
+}
+
+// ============================================================
+// PendingStorageInspectionManager Implementation
+// ============================================================
+
+PendingStorageInspectionManager& PendingStorageInspectionManager::Instance()
+{
+    static PendingStorageInspectionManager s_instance;
+    return s_instance;
+}
+
+PendingStorageInspectionManager::PendingStorageInspectionManager()
+    : m_allowlist(nullptr), m_workerRunning(false)
+{
+}
+
+PendingStorageInspectionManager::~PendingStorageInspectionManager()
+{
+    Stop();
+}
+
+void PendingStorageInspectionManager::SetAllowlistManager(AllowlistManager* allowlist)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_allowlist = allowlist;
+}
+
+void PendingStorageInspectionManager::RegisterPendingDevice(const USBDevice& device)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    PendingEntry entry;
+    entry.device = device;
+    entry.registrationTime = std::chrono::steady_clock::now();
+    entry.retryCount = 0;
+    m_pendingDevices[device.deviceId] = entry;
+
+    if (!m_workerRunning.load())
+    {
+        m_workerRunning.store(true);
+        if (m_workerThread.joinable())
+        {
+            m_workerThread.join();
+        }
+        m_workerThread = std::thread(&PendingStorageInspectionManager::WorkerLoop, this);
+    }
+}
+
+void PendingStorageInspectionManager::UnregisterDevice(const std::wstring& deviceIdOrPath)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    for (auto it = m_pendingDevices.begin(); it != m_pendingDevices.end();)
+    {
+        if (it->first == deviceIdOrPath ||
+            it->second.device.deviceId == deviceIdOrPath ||
+            it->second.device.deviceInterfacePath == deviceIdOrPath ||
+            (!it->second.device.serialNumber.empty() && deviceIdOrPath.find(it->second.device.serialNumber) != std::wstring::npos))
+        {
+            it = m_pendingDevices.erase(it);
+        }
+        else
+        {
+            ++it;
+        }
+    }
+}
+
+void PendingStorageInspectionManager::OnVolumeArrival()
+{
+    std::vector<USBDevice> devicesToCheck;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        for (const auto& kv : m_pendingDevices)
+        {
+            devicesToCheck.push_back(kv.second.device);
+        }
+    }
+
+    for (const auto& dev : devicesToCheck)
+    {
+        CheckSinglePendingDevice(dev, 15);
+    }
+}
+
+bool PendingStorageInspectionManager::HasPendingDevices() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return !m_pendingDevices.empty();
+}
+
+void PendingStorageInspectionManager::Stop()
+{
+    m_workerRunning.store(false);
+    if (m_workerThread.joinable())
+    {
+        m_workerThread.join();
+    }
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_pendingDevices.clear();
+}
+
+void PendingStorageInspectionManager::WorkerLoop()
+{
+    const int maxRetries = 15;
+    while (m_workerRunning.load())
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        if (!m_workerRunning.load()) break;
+
+        std::vector<USBDevice> devicesToCheck;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            if (m_pendingDevices.empty())
+            {
+                m_workerRunning.store(false);
+                break;
+            }
+            for (auto& kv : m_pendingDevices)
+            {
+                kv.second.retryCount++;
+                devicesToCheck.push_back(kv.second.device);
+            }
+        }
+
+        for (const auto& dev : devicesToCheck)
+        {
+            CheckSinglePendingDevice(dev, maxRetries);
+        }
+    }
+}
+
+void PendingStorageInspectionManager::CheckSinglePendingDevice(const USBDevice& dev, int maxRetries)
+{
+    int currentRetry = 0;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_pendingDevices.find(dev.deviceId);
+        if (it == m_pendingDevices.end()) return;
+        currentRetry = it->second.retryCount;
+    }
+
+    if (!DevicePresenceMonitor::IsDevicePresent(dev.deviceId))
+    {
+        UnregisterDevice(dev.deviceId);
+        return;
+    }
+
+    auto mappedDrives = StorageExecutionMonitor::Instance().GetDriveLettersForDevice(dev);
+    if (!mappedDrives.empty())
+    {
+        std::wcout << L"[PENDING-INSPECTION] Volume mounted for " << dev.deviceId
+                   << L" on " << mappedDrives.front() << L" (retry " << currentRetry << L")\n";
+
+        bool storageClean = InspectStorageMedia(dev, 2000);
+
+        TrustAssessmentReport postReport;
+        TrustAssessmentEngine::Instance().GetActiveAssessment(dev.deviceId, postReport);
+
+        bool isThreat = (postReport.executablePolicyStatus == L"BLOCKED" ||
+                        postReport.malwareScanResult == L"INFECTED" ||
+                        postReport.recommendation == TrustRecommendation::REJECT);
+
+        if (storageClean && !isThreat)
+        {
+            DevicePresenceMonitor::SetDeviceState(dev.deviceId, DeviceTrackingState::RELEASED);
+            ProtectedFileMonitor::Instance().SetActiveDevice(dev);
+
+            std::wcout << L"[PENDING-INSPECTION] Inspection CLEAN! Device released from quarantine: "
+                       << dev.deviceId << L"\n";
+
+            EventLogger::Instance().LogEvent(
+                SecurityEventType::DEVICE_RELEASED,
+                dev,
+                L"ALLOW",
+                L"Storage device released: volume mounted and media inspection verified clean"
+            );
+
+            RestClient::Instance().CheckOrRequestDevice(EventLogger::Instance().GetClientId(), dev, &postReport);
+            UnregisterDevice(dev.deviceId);
+        }
+        else if (isThreat)
+        {
+            std::wcerr << L"[PENDING-INSPECTION] Threat detected on mounted volume! Revoking device.\n";
+            std::vector<std::wstring> reasons = postReport.explainableReasons;
+            if (!postReport.exactThreatEvidence.empty())
+            {
+                reasons.push_back(postReport.exactThreatEvidence);
+            }
+
+            AllowlistManager* al = m_allowlist ? m_allowlist : TrustAssessmentEngine::Instance().GetAllowlistManager();
+
+            EnforcementManager::EnforceCriticalThreat(
+                dev,
+                postReport.executablePolicyStatus == L"BLOCKED" ? L"STORAGE_EXECUTION_BLOCKED" : L"MALWARE_DETECTED",
+                postReport.exactThreatEvidence,
+                postReport.totalRiskScore,
+                reasons,
+                al
+            );
+
+            CONFIGRET qCr = CR_FAILURE;
+            EnforcementManager::QuarantineDevice(dev, &qCr);
+            DevicePresenceMonitor::SetDeviceState(dev.deviceId, DeviceTrackingState::QUARANTINED);
+
+            RestClient::Instance().CheckOrRequestDevice(EventLogger::Instance().GetClientId(), dev, &postReport);
+            UnregisterDevice(dev.deviceId);
+        }
+        return;
+    }
+
+    if (currentRetry >= maxRetries)
+    {
+        std::wcout << L"[PENDING-INSPECTION] Bounded inspection wait expired (" << maxRetries
+                   << L"s) for " << dev.deviceId << L". Device remains restricted pending filesystem mount.\n";
+
+        CONFIGRET qCr = CR_FAILURE;
+        EnforcementManager::QuarantineDevice(dev, &qCr);
+        DevicePresenceMonitor::SetDeviceState(dev.deviceId, DeviceTrackingState::QUARANTINED);
+
+        TrustAssessmentReport expiredReport;
+        if (TrustAssessmentEngine::Instance().GetActiveAssessment(dev.deviceId, expiredReport))
+        {
+            RestClient::Instance().CheckOrRequestDevice(EventLogger::Instance().GetClientId(), dev, &expiredReport);
+        }
+
+        UnregisterDevice(dev.deviceId);
+    }
+}
+

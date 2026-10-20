@@ -21,9 +21,11 @@ struct PolicyConfig
     bool blockUnauthorizedComposite = true;
     bool allowCompositeMouseKeyboard = true;
 
-    // Algorithm 4: Protected-File Access Monitoring
+    // Algorithm 4: Protected-File & Multi-Folder Policy Access Restrictions
     std::wstring protectedDirectory = L"C:\\USBIPS_Protected";
     std::wstring canaryFileName = L"confidential_canary.txt";
+    bool enforceFolderProtectionOnUsb = true;
+    bool deactivateProtectionOnUsbRemoval = true;
 
     // Algorithm 5: Removable Storage Execution Restrictions
     bool blockStorageExecution = true;

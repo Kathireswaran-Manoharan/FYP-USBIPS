@@ -176,10 +176,12 @@ def update_device(device_id: int, update: AllowlistDeviceUpdate):
     return {"status": "success", "message": f"Device ID {device_id} updated successfully"}
 
 @router.delete("/{device_id}", response_model=dict)
-def revoke_device_from_allowlist(device_id: int):
+def revoke_device_from_allowlist(device_id: int, permanent: bool = False):
     """
-    Task 9 & 10: DELETE /api/devices/{id} - Revoke/remove a device.
-    Purges device from master_allowlist and marks all associated requests as REVOKED so clients enforce block.
+    Task 9 & 10: DELETE /api/devices/{id} - Revoke or permanently remove a device.
+    If permanent=True, purges the device from master_allowlist and deletes associated records from pending_requests,
+    so that reinsertion requires new-device authorization instead of returning REVOKED block or auto-approving.
+    If permanent=False (default), revokes the device and records status=REVOKED for enforcement.
     """
     now = utc_now_iso()
     with get_db() as conn:
@@ -192,36 +194,55 @@ def revoke_device_from_allowlist(device_id: int):
         # 1. Delete from master_allowlist
         cursor.execute("DELETE FROM master_allowlist WHERE id = ?;", (device_id,))
 
-        # 2. Mark any pending/approved requests for this hardware as REVOKED, or insert a REVOKED record
-        cursor.execute("""
-            UPDATE pending_requests
-            SET status = 'REVOKED', decided_at = ?, decision_by = 'Administrator'
-            WHERE vendor_id = ? AND product_id = ? AND serial_number = ?;
-        """, (now, dev["vendor_id"], dev["product_id"], dev["serial_number"]))
-        if cursor.rowcount == 0:
+        if permanent:
+            # 2. Permanent removal: delete associated device records from pending_requests
             cursor.execute("""
-                INSERT INTO pending_requests (
-                    request_id, client_id, vendor_id, product_id, serial_number,
-                    device_type, description, status, requested_at, decided_at, decision_by
-                ) VALUES (?, 'ALL_CLIENTS', ?, ?, ?, ?, ?, 'REVOKED', ?, ?, 'Administrator');
-            """, (
-                str(uuid.uuid4()), dev["vendor_id"], dev["product_id"], dev["serial_number"],
-                dev["device_type"] or "OTHER", dev["description"] or "", now, now
-            ))
+                DELETE FROM pending_requests
+                WHERE vendor_id = ? AND product_id = ? AND serial_number = ?;
+            """, (dev["vendor_id"], dev["product_id"], dev["serial_number"]))
 
-        # 3. Log revocation event in central telemetry
-        event_id = str(uuid.uuid4())
-        cursor.execute("""
-            INSERT INTO server_events (
-                event_id, client_id, timestamp, event_type, vendor_id, product_id,
-                serial_number, device_id, device_type, description, decision, reason, received_at
-            ) VALUES (?, 'CENTRAL_SERVER', ?, 'DEVICE_BLOCKED', ?, ?, ?, '', ?, ?, 'BLOCK', 'Authorization revoked by administrator', ?);
-        """, (
-            event_id, now, dev["vendor_id"], dev["product_id"], dev["serial_number"],
-            dev["device_type"] or "OTHER", dev["description"] or "", now
-        ))
-            
-    return {"status": "success", "message": f"Device ID {device_id} revoked from master allowlist"}
+            # 3. Log permanent removal event
+            event_id = str(uuid.uuid4())
+            cursor.execute("""
+                INSERT INTO server_events (
+                    event_id, client_id, timestamp, event_type, vendor_id, product_id,
+                    serial_number, device_id, device_type, description, decision, reason, received_at
+                ) VALUES (?, 'CENTRAL_SERVER', ?, 'DEVICE_REMOVED', ?, ?, ?, '', ?, ?, 'REMOVED', 'Device permanently removed from master allowlist and records deleted', ?);
+            """, (
+                event_id, now, dev["vendor_id"], dev["product_id"], dev["serial_number"],
+                dev["device_type"] or "OTHER", dev["description"] or "", now
+            ))
+            return {"status": "success", "message": f"Device ID {device_id} permanently removed from system"}
+        else:
+            # 2. Mark any pending/approved requests for this hardware as REVOKED, or insert a REVOKED record
+            cursor.execute("""
+                UPDATE pending_requests
+                SET status = 'REVOKED', decided_at = ?, decision_by = 'Administrator'
+                WHERE vendor_id = ? AND product_id = ? AND serial_number = ?;
+            """, (now, dev["vendor_id"], dev["product_id"], dev["serial_number"]))
+            if cursor.rowcount == 0:
+                cursor.execute("""
+                    INSERT INTO pending_requests (
+                        request_id, client_id, vendor_id, product_id, serial_number,
+                        device_type, description, status, requested_at, decided_at, decision_by
+                    ) VALUES (?, 'ALL_CLIENTS', ?, ?, ?, ?, ?, 'REVOKED', ?, ?, 'Administrator');
+                """, (
+                    str(uuid.uuid4()), dev["vendor_id"], dev["product_id"], dev["serial_number"],
+                    dev["device_type"] or "OTHER", dev["description"] or "", now, now
+                ))
+
+            # 3. Log revocation event in central telemetry
+            event_id = str(uuid.uuid4())
+            cursor.execute("""
+                INSERT INTO server_events (
+                    event_id, client_id, timestamp, event_type, vendor_id, product_id,
+                    serial_number, device_id, device_type, description, decision, reason, received_at
+                ) VALUES (?, 'CENTRAL_SERVER', ?, 'DEVICE_BLOCKED', ?, ?, ?, '', ?, ?, 'BLOCK', 'Authorization revoked by administrator', ?);
+            """, (
+                event_id, now, dev["vendor_id"], dev["product_id"], dev["serial_number"],
+                dev["device_type"] or "OTHER", dev["description"] or "", now
+            ))
+            return {"status": "success", "message": f"Device ID {device_id} revoked from master allowlist"}
 
 @router.post("/check", response_model=DeviceCheckResponse)
 @router.post("/check-or-request", response_model=DeviceCheckResponse)
@@ -239,30 +260,73 @@ def check_or_request_device(data: DeviceCheckRequest):
         
         # 1. Check Master Allowlist & Expiry
         cursor.execute("""
-            SELECT id, status, expires_at, duration_minutes FROM master_allowlist
+            SELECT id, status, expires_at, duration_minutes, decision_reason FROM master_allowlist
             WHERE vendor_id = ? AND product_id = ? AND serial_number = ? AND status = 'APPROVED';
         """, (vid, pid, serial))
         allowed = cursor.fetchone()
         
         if allowed:
-            exp = allowed["expires_at"]
-            if exp and exp < now:
-                cursor.execute("UPDATE master_allowlist SET status = 'EXPIRED' WHERE id = ?;", (allowed["id"],))
-                cursor.execute("UPDATE pending_requests SET status = 'EXPIRED' WHERE vendor_id = ? AND product_id = ? AND serial_number = ?;", (vid, pid, serial))
+            # Critical Security Rule: Confirmed critical threats (.exe, .com, malware) must NEVER be overridden by Master Allowlist!
+            if data.recommendation == "REJECT" or data.severity == "CRITICAL":
+                cursor.execute("DELETE FROM master_allowlist WHERE id = ?;", (allowed["id"],))
+                allowed = None
+            else:
+                exp = allowed["expires_at"]
+                if exp and exp < now:
+                    cursor.execute("UPDATE master_allowlist SET status = 'EXPIRED' WHERE id = ?;", (allowed["id"],))
+                    cursor.execute("UPDATE pending_requests SET status = 'EXPIRED' WHERE vendor_id = ? AND product_id = ? AND serial_number = ?;", (vid, pid, serial))
+                    return DeviceCheckResponse(
+                        decision="BLOCK",
+                        request_status="EXPIRED",
+                        message="Device authorization expired. Central administrator re-approval required.",
+                        duration_minutes=allowed["duration_minutes"],
+                        expires_at=exp
+                    )
+
+                # Update or insert tracking record in pending_requests so dashboard reflects latest assessment and scan status
+                if data.algorithms_json and data.algorithms_json.strip() not in ("", "{}"):
+                    cursor.execute("""
+                        SELECT request_id FROM pending_requests
+                        WHERE vendor_id = ? AND product_id = ? AND serial_number = ?;
+                    """, (vid, pid, serial))
+                    existing_p = cursor.fetchone()
+                    if existing_p:
+                        cursor.execute("""
+                            UPDATE pending_requests SET
+                                client_id = ?, device_type = ?, description = ?, device_path = ?,
+                                total_risk_score = ?, severity = ?, recommendation = ?,
+                                assessment_summary = ?, algorithms_json = ?
+                            WHERE request_id = ?;
+                        """, (
+                            data.client_id, data.device_type or "OTHER", data.description or "", data.device_path or "",
+                            data.total_risk_score or 0, data.severity or "LOW", data.recommendation or "APPROVE",
+                            data.assessment_summary or "", data.algorithms_json, existing_p["request_id"]
+                        ))
+                    else:
+                        req_id = str(uuid.uuid4())
+                        cursor.execute("""
+                            INSERT INTO pending_requests (
+                                request_id, client_id, vendor_id, product_id, serial_number,
+                                device_type, description, device_path, status, requested_at,
+                                decided_at, decision_by, decision_reason, duration_minutes, expires_at,
+                                total_risk_score, severity, recommendation, assessment_summary, algorithms_json
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'APPROVED', ?, ?, 'Administrator', ?, ?, ?, ?, ?, ?, ?, ?);
+                        """, (
+                            req_id, data.client_id, vid, pid, serial,
+                            data.device_type or "OTHER", data.description or "", data.device_path or "",
+                            now, now, allowed["decision_reason"] or "Registered in Master Allowlist",
+                            allowed["duration_minutes"], exp,
+                            data.total_risk_score or 0, data.severity or "LOW", data.recommendation or "APPROVE",
+                            data.assessment_summary or "", data.algorithms_json
+                        ))
+
                 return DeviceCheckResponse(
-                    decision="BLOCK",
-                    request_status="EXPIRED",
-                    message="Device authorization expired. Central administrator re-approval required.",
+                    decision="ALLOW",
+                    request_status="APPROVED",
+                    message="Device is registered in central master allowlist",
                     duration_minutes=allowed["duration_minutes"],
                     expires_at=exp
                 )
-            return DeviceCheckResponse(
-                decision="ALLOW",
-                request_status="APPROVED",
-                message="Device is registered in central master allowlist",
-                duration_minutes=allowed["duration_minutes"],
-                expires_at=exp
-            )
 
         # 1b. Check for challenge replay across requests
         if data.captcha_challenge_id:
@@ -279,28 +343,48 @@ def check_or_request_device(data: DeviceCheckRequest):
 
         # 2. Safety Rule: If device has critical violations, reject immediately
         if data.recommendation == "REJECT" or data.severity == "CRITICAL":
-            req_id = str(uuid.uuid4())
             cursor.execute("""
-                INSERT INTO pending_requests (
-                    request_id, client_id, vendor_id, product_id, serial_number,
-                    device_type, description, device_path, status, requested_at,
-                    session_id, captcha_challenge_id, captcha_result, verification_method,
-                    verification_start, verification_completed, attempt_count, verification_score,
-                    verification_duration_seconds, temp_release_applied, temp_release_duration_seconds,
-                    re_quarantine_result, current_enforcement_state, total_risk_score, severity,
-                    recommendation, assessment_summary, algorithms_json, decided_at, decision_by, decision_reason
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'DECLINED', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Central Policy', 'Critical Security Violation');
-            """, (
-                req_id, data.client_id, vid, pid, serial,
-                data.device_type or "OTHER", data.description or "", data.device_path or "", now,
-                data.session_id or "", data.captcha_challenge_id or "", data.captcha_result or "NOT_COMPLETED",
-                data.verification_method or "NONE", data.verification_start or "", data.verification_completed or "",
-                data.attempt_count or 0, data.verification_score or 0, data.verification_duration_seconds or 0.0,
-                1 if data.temp_release_applied else 0, data.temp_release_duration_seconds or 0.0,
-                data.re_quarantine_result or "", data.current_enforcement_state or "QUARANTINED",
-                data.total_risk_score or 0, data.severity or "CRITICAL", data.recommendation or "REJECT",
-                data.assessment_summary or "", data.algorithms_json or "{}", now
-            ))
+                SELECT request_id FROM pending_requests
+                WHERE vendor_id = ? AND product_id = ? AND serial_number = ?;
+            """, (vid, pid, serial))
+            existing_crit = cursor.fetchone()
+            if existing_crit:
+                cursor.execute("""
+                    UPDATE pending_requests SET
+                        client_id = ?, device_type = ?, description = ?, device_path = ?,
+                        status = 'DECLINED', requested_at = ?,
+                        total_risk_score = ?, severity = ?, recommendation = ?,
+                        assessment_summary = ?, algorithms_json = ?, decided_at = ?, decision_by = 'Central Policy', decision_reason = 'Critical Security Violation'
+                    WHERE request_id = ?;
+                """, (
+                    data.client_id, data.device_type or "OTHER", data.description or "", data.device_path or "",
+                    now, data.total_risk_score or 0, data.severity or "CRITICAL", data.recommendation or "REJECT",
+                    data.assessment_summary or "", data.algorithms_json or "{}", now, existing_crit["request_id"]
+                ))
+                req_id = existing_crit["request_id"]
+            else:
+                req_id = str(uuid.uuid4())
+                cursor.execute("""
+                    INSERT INTO pending_requests (
+                        request_id, client_id, vendor_id, product_id, serial_number,
+                        device_type, description, device_path, status, requested_at,
+                        session_id, captcha_challenge_id, captcha_result, verification_method,
+                        verification_start, verification_completed, attempt_count, verification_score,
+                        verification_duration_seconds, temp_release_applied, temp_release_duration_seconds,
+                        re_quarantine_result, current_enforcement_state, total_risk_score, severity,
+                        recommendation, assessment_summary, algorithms_json, decided_at, decision_by, decision_reason
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'DECLINED', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Central Policy', 'Critical Security Violation');
+                """, (
+                    req_id, data.client_id, vid, pid, serial,
+                    data.device_type or "OTHER", data.description or "", data.device_path or "", now,
+                    data.session_id or "", data.captcha_challenge_id or "", data.captcha_result or "NOT_COMPLETED",
+                    data.verification_method or "NONE", data.verification_start or "", data.verification_completed or "",
+                    data.attempt_count or 0, data.verification_score or 0, data.verification_duration_seconds or 0.0,
+                    1 if data.temp_release_applied else 0, data.temp_release_duration_seconds or 0.0,
+                    data.re_quarantine_result or "", data.current_enforcement_state or "QUARANTINED",
+                    data.total_risk_score or 0, data.severity or "CRITICAL", data.recommendation or "REJECT",
+                    data.assessment_summary or "", data.algorithms_json or "{}", now
+                ))
             return DeviceCheckResponse(
                 decision="BLOCK",
                 request_id=req_id,

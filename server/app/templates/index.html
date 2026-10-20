@@ -511,6 +511,21 @@
       }
     }
 
+    async function deleteAllowlistDevicePermanent(deviceId, vid, pid, serial) {
+      if (!confirm(`Permanently remove device ${vid}:${pid} (${serial || 'No S/N'})? It will be purged from the master allowlist and its authorization records deleted. On reinsertion, it will require new authorization.`)) return;
+      try {
+        const res = await fetch(`/api/devices/${deviceId}?permanent=true`, { method: "DELETE" });
+        if (res.ok) {
+          showToast(`Device ${vid}:${pid} permanently removed`);
+          loadAllData();
+        } else {
+          showToast("Failed to permanently remove device", true);
+        }
+      } catch (ex) {
+        showToast("Error: " + ex.message, true);
+      }
+    }
+
     async function reAuthorizeDevice(requestId) {
       const durStr = prompt("Enter authorization duration in minutes (leave blank for permanent):", "");
       if (durStr === null) return;
@@ -572,14 +587,14 @@
     }
 
     async function deleteRequest(requestId) {
-      if (!confirm("Dismiss / remove this request card from the dashboard? (If reconnected, device can be re-evaluated)")) return;
+      if (!confirm("Permanently remove this device record and allowlist authorization? (On reinsertion, it must go through new-device authorization)")) return;
       try {
         const res = await fetch(`/api/requests/${requestId}`, { method: "DELETE" });
         if (res.ok) {
-          showToast("Request record removed from dashboard queue.");
+          showToast("Device permanently removed from queue and allowlist.");
           loadAllData();
         } else {
-          showToast("Failed to remove request", true);
+          showToast("Failed to remove device", true);
         }
       } catch (ex) {
         showToast("Error: " + ex.message, true);
@@ -829,24 +844,60 @@
         let malwareNote = "Non-storage device; filesystem scan not applicable";
 
         const scanRes = meta.malware_scan_result || "NOT_SCANNED";
-        if (req.device_type === "STORAGE" || scanRes === "NOT_SCANNED" || scanRes === "CLEAN" || scanRes === "DETECTED") {
+        if (req.device_type === "STORAGE" || scanRes === "NOT_SCANNED" || scanRes === "SCANNING" || scanRes === "CLEAN" || scanRes === "DETECTED" || scanRes === "INFECTED" || scanRes === "FAILED" || scanRes === "UNAVAILABLE") {
           if (scanRes === "CLEAN") {
             malwareBadge = "badge-online";
             malwareText = "CLEAN";
             malwareNote = "Storage volume scanned; no malware signatures detected";
-          } else if (scanRes === "DETECTED") {
+          } else if (scanRes === "DETECTED" || scanRes === "INFECTED") {
             malwareBadge = "badge-offline";
-            malwareText = "MALWARE DETECTED";
-            malwareNote = "High-risk executable or autorun signature identified";
+            malwareText = "INFECTED";
+            malwareNote = meta.exact_threat_evidence || "Confirmed malware signature identified";
+          } else if (scanRes === "SCANNING") {
+            malwareBadge = "badge-warning";
+            malwareText = "SCANNING";
+            malwareNote = "Antivirus inspection currently in progress";
           } else if (scanRes === "FAILED") {
             malwareBadge = "badge-offline";
-            malwareText = "SCAN FAILED";
-            malwareNote = "Scanner encountered an error during inspection";
+            malwareText = "FAILED";
+            malwareNote = meta.exact_threat_evidence || "Scanner encountered an error during inspection";
+          } else if (scanRes === "UNAVAILABLE") {
+            malwareBadge = "badge-secondary";
+            malwareText = "UNAVAILABLE";
+            malwareNote = "Antivirus engine unavailable on endpoint";
           } else {
             malwareBadge = "badge-secondary";
             malwareText = "NOT_SCANNED";
-            malwareNote = "Volume not mounted or waiting for user scan authorization (NOT verified clean)";
+            malwareNote = "Volume not yet mounted or inspection pending (NOT verified clean)";
           }
+        }
+
+        // Compute Operational Security Status per Section 8
+        let operationalStatus = "PENDING INSPECTION";
+        let operationalBadge = "badge-ask";
+        const execPolicy = meta.executable_policy_status || (req.device_type === "STORAGE" ? "NOT_SCANNED" : "NOT_APPLICABLE");
+
+        if (execPolicy === "BLOCKED" || scanRes === "INFECTED" || scanRes === "DETECTED" || req.status === "REVOKED" || rec === "REJECT") {
+          operationalStatus = "THREAT DETECTED — QUARANTINED";
+          operationalBadge = "badge-offline";
+        } else if (scanRes === "SCANNING") {
+          operationalStatus = "SCAN IN PROGRESS";
+          operationalBadge = "badge-warning";
+        } else if (scanRes === "FAILED" || execPolicy === "FAILED" || scanRes === "UNAVAILABLE") {
+          operationalStatus = "SCAN FAILED — RESTRICTED";
+          operationalBadge = "badge-offline";
+        } else if (req.status === "APPROVED" && (req.current_enforcement_state === "RELEASED" || meta.current_enforcement_state === "RELEASED") && execPolicy === "COMPLIANT" && (scanRes === "CLEAN" || req.device_type !== "STORAGE")) {
+          operationalStatus = "APPROVED AND RELEASED";
+          operationalBadge = "badge-online";
+        } else if (execPolicy === "COMPLIANT" && (scanRes === "CLEAN" || req.device_type !== "STORAGE") && req.status === "PENDING") {
+          operationalStatus = "SECURITY CHECKS PASSED — AWAITING ADMIN APPROVAL";
+          operationalBadge = "badge-ask";
+        } else if (req.status === "APPROVED" && (scanRes === "NOT_SCANNED" || execPolicy === "NOT_SCANNED")) {
+          operationalStatus = "PENDING INSPECTION";
+          operationalBadge = "badge-ask";
+        } else if (req.status === "DECLINED") {
+          operationalStatus = "DECLINED — QUARANTINED";
+          operationalBadge = "badge-offline";
         }
 
         // Reasons list
@@ -864,7 +915,7 @@
             <div>
               <div class="pending-card-title" style="font-size: 16px; font-weight: bold; color: #f8fafc; display: flex; align-items: center; gap: 8px;">
                 <span>${req.description || "Unknown USB Device"}</span>
-                <span class="badge ${statusBadge}" style="font-size: 11px;">STATUS: ${req.status}</span>
+                <span class="badge ${operationalBadge}" style="font-size: 11px;">${operationalStatus}</span>
               </div>
               <div class="pending-meta" style="font-size: 12px; color: #94a3b8; margin-top: 4px;">
                 Request ID: <code>${req.request_id}</code> | Client: <code>${req.client_id}</code> | Time: ${req.requested_at}
@@ -902,9 +953,21 @@
               <strong style="color: ${meta.admin_authorized ? '#4ade80' : (req.status === 'REVOKED' ? '#ef4444' : '#fbbf24')};">${meta.admin_authorized ? '✓ AUTHORIZED' : (req.status === 'REVOKED' ? '✕ REVOKED' : '⏳ PENDING REVIEW')}</strong>
             </div>
             <div>
+              <span style="color: #94a3b8;">Executable Policy:</span>
+              <span class="badge ${execPolicy === 'COMPLIANT' ? 'badge-online' : (execPolicy === 'BLOCKED' ? 'badge-offline' : (execPolicy === 'FAILED' ? 'badge-offline' : 'badge-secondary'))}" style="font-size: 10px;">${execPolicy}</span>
+              ${meta.exact_threat_file ? `<div style="font-size: 10px; color: #f87171; margin-top: 2px; font-family: monospace; word-break: break-all;">Offending: ${meta.exact_threat_file}</div>` : ''}
+              ${execPolicy === 'COMPLIANT' ? `<div style="font-size: 10px; color: #94a3b8; margin-top: 2px;">0 prohibited .exe/.com files found</div>` : ''}
+              ${execPolicy === 'NOT_SCANNED' ? `<div style="font-size: 10px; color: #94a3b8; margin-top: 2px;">Volume pending mount</div>` : ''}
+            </div>
+            <div>
               <span style="color: #94a3b8;">Malware Scan Status:</span>
               <span class="badge ${malwareBadge}" style="font-size: 10px;">${malwareText}</span>
               <div style="font-size: 10px; color: #94a3b8; margin-top: 2px;">${malwareNote}</div>
+            </div>
+            <div>
+              <span style="color: #94a3b8;">Enforcement State:</span>
+              <span class="badge ${req.current_enforcement_state === 'RELEASED' ? 'badge-online' : 'badge-offline'}" style="font-size: 10px;">${req.current_enforcement_state || 'QUARANTINED'}</span>
+              <div style="font-size: 10px; color: #94a3b8; margin-top: 2px;">${req.current_enforcement_state === 'RELEASED' ? 'Hardware devnode enabled' : 'Hardware devnode disabled (Code 22)'}</div>
             </div>
             <div>
               <span style="color: #94a3b8;">Behavioral Risk Score:</span>
@@ -1072,6 +1135,7 @@
               <div style="display: flex; gap: 6px;">
                 <button class="btn btn-secondary btn-sm" onclick='openEditModal(${JSON.stringify(d).replace(/'/g, "&apos;")})'>Edit</button>
                 <button class="btn btn-danger btn-sm" onclick="revokeDevice(${d.id}, '${d.vendor_id}', '${d.product_id}')">Revoke</button>
+                <button class="btn btn-secondary btn-sm" style="background-color: #4b5563; color: #f3f4f6;" onclick="deleteAllowlistDevicePermanent(${d.id}, '${d.vendor_id}', '${d.product_id}', '${d.serial_number}')" title="Permanently remove from allowlist and database">Permanent Remove</button>
               </div>
             </td>
           </tr>

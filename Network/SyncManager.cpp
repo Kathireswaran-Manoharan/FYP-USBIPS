@@ -7,6 +7,7 @@
 #include "../AccessControl/PolicyConfig.h"
 #include "../AccessControl/ProtectedFileMonitor.h"
 #include "../AccessControl/StorageExecutionMonitor.h"
+#include "../AccessControl/TrustAssessmentEngine.h"
 #include "../AccessControl/USBNetworkAnomalyDetector.h"
 #include "../AccessControl/MinifilterClient.h"
 
@@ -256,18 +257,90 @@ bool SyncManager::PerformSyncCycle()
                             bool released = EnforcementManager::ReleaseDevice(item.device, &crResult);
                             if (released)
                             {
-                                DevicePresenceMonitor::SetDeviceState(item.deviceId, DeviceTrackingState::RELEASED);
-                                std::wcout << L"[OK] Authorization enforced. Peripheral is now ENABLED at OS level.\n";
-                                std::wcout << L"=======================================================\n";
+                                if (!item.device.hasStorage)
+                                {
+                                    DevicePresenceMonitor::SetDeviceState(item.deviceId, DeviceTrackingState::RELEASED);
+                                    std::wcout << L"[OK] Authorization enforced. Peripheral is now ENABLED at OS level.\n";
+                                    std::wcout << L"=======================================================\n";
 
-                                EventLogger::Instance().LogEvent(
-                                    SecurityEventType::DEVICE_RELEASED,
-                                    item.device,
-                                    L"ALLOW",
-                                    L"Central server approved authorization; physical peripheral enabled in real-time"
-                                );
+                                    EventLogger::Instance().LogEvent(
+                                        SecurityEventType::DEVICE_RELEASED,
+                                        item.device,
+                                        L"ALLOW",
+                                        L"Central server approved authorization; physical peripheral enabled in real-time"
+                                    );
 
-                                ProtectedFileMonitor::Instance().SetActiveDevice(item.device);
+                                    ProtectedFileMonitor::Instance().SetActiveDevice(item.device);
+                                }
+                                else
+                                {
+                                    // Storage device must undergo pre-release executable inspection
+                                    std::wcout << L"[SECURITY] Storage device approved by Central Server; performing pre-release executable inspection...\n";
+                                    bool storageClean = InspectStorageMedia(item.device, 2000);
+
+                                    TrustAssessmentReport postReport;
+                                    TrustAssessmentEngine::Instance().GetActiveAssessment(item.deviceId, postReport);
+
+                                    bool isThreat = (postReport.executablePolicyStatus == L"BLOCKED" ||
+                                                     postReport.malwareScanResult == L"INFECTED" ||
+                                                     postReport.recommendation == TrustRecommendation::REJECT);
+
+                                    if (storageClean && !isThreat)
+                                    {
+                                        DevicePresenceMonitor::SetDeviceState(item.deviceId, DeviceTrackingState::RELEASED);
+                                        std::wcout << L"[OK] Storage inspection CLEAN. Device is now RELEASED at OS level.\n";
+                                        std::wcout << L"=======================================================\n";
+
+                                        EventLogger::Instance().LogEvent(
+                                            SecurityEventType::DEVICE_RELEASED,
+                                            item.device,
+                                            L"ALLOW",
+                                            L"Central server approved authorization; storage inspection clean, released at OS level"
+                                        );
+
+                                        ProtectedFileMonitor::Instance().SetActiveDevice(item.device);
+                                        RestClient::Instance().CheckOrRequestDevice(EventLogger::Instance().GetClientId(), item.device, &postReport);
+                                    }
+                                    else if (isThreat)
+                                    {
+                                        std::wcerr << L"[SECURITY] Critical threat detected during pre-release inspection of approved device! Revoking and quarantining.\n";
+                                        std::vector<std::wstring> reasons = postReport.explainableReasons;
+                                        if (!postReport.exactThreatEvidence.empty())
+                                        {
+                                            reasons.push_back(postReport.exactThreatEvidence);
+                                        }
+
+                                        EnforcementManager::EnforceCriticalThreat(
+                                            item.device,
+                                            postReport.executablePolicyStatus == L"BLOCKED" ? L"STORAGE_EXECUTION_BLOCKED" : L"MALWARE_DETECTED",
+                                            postReport.exactThreatEvidence,
+                                            postReport.totalRiskScore,
+                                            reasons,
+                                            m_allowlist
+                                        );
+
+                                        CONFIGRET qCr = CR_FAILURE;
+                                        EnforcementManager::QuarantineDevice(item.device, &qCr);
+                                        DevicePresenceMonitor::SetDeviceState(item.deviceId, DeviceTrackingState::QUARANTINED);
+                                        std::wcout << L"=======================================================\n";
+
+                                        RestClient::Instance().CheckOrRequestDevice(EventLogger::Instance().GetClientId(), item.device, &postReport);
+                                    }
+                                    else
+                                    {
+                                        // Volume not yet mounted or inspection pending
+                                        std::wcout << L"[SECURITY] Storage volume pending mount. Keeping device restricted.\n";
+                                        std::wcout << L"[SECURITY] Registering bounded retry mechanism...\n";
+                                        std::wcout << L"=======================================================\n";
+
+                                        CONFIGRET qCr = CR_FAILURE;
+                                        EnforcementManager::QuarantineDevice(item.device, &qCr);
+                                        DevicePresenceMonitor::SetDeviceState(item.deviceId, DeviceTrackingState::QUARANTINED);
+                                        PendingStorageInspectionManager::Instance().RegisterPendingDevice(item.device);
+
+                                        RestClient::Instance().CheckOrRequestDevice(EventLogger::Instance().GetClientId(), item.device, &postReport);
+                                    }
+                                }
                             }
                             else
                             {

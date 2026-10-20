@@ -2213,6 +2213,187 @@ class TestUSBIPSServer(unittest.TestCase):
         self.assertEqual(rec_ok.status_code, 200)
         self.assertEqual(rec_ok.json()["status"], "success")
 
+    def test_39_permanent_removal_lifecycle(self):
+        """
+        Verify:
+        1. Approved device in master_allowlist returns ALLOW.
+        2. DELETE /api/devices/{id}?permanent=true removes device from master_allowlist AND purges pending_requests.
+        3. On reinsertion, device is NOT auto-approved and NOT permanently blocked; it returns ASK/PENDING.
+        4. DELETE /api/requests/{id} on an approved request also removes from master_allowlist, ensuring no stale auto-approval.
+        """
+        vid, pid, sn = "0951", "1666", "SN-PERM-REMOVE-001"
+
+        # 1. Register and approve device
+        chk1 = self.client.post("/api/devices/check-or-request", json={
+            "client_id": "client-perm-test", "vendor_id": vid, "product_id": pid, "serial_number": sn,
+            "device_type": "STORAGE", "description": "Kingston DataTraveler"
+        }).json()
+        self.assertEqual(chk1["decision"], "ASK")
+        req_id = chk1["request_id"]
+
+        app_res = self.client.post(f"/api/requests/{req_id}/approve", json={
+            "admin_user": "SecAdmin", "decision_reason": "Approved for transfer"
+        })
+        self.assertEqual(app_res.status_code, 200)
+
+        # Verify device is now ALLOW
+        chk2 = self.client.post("/api/devices/check-or-request", json={
+            "client_id": "client-perm-test", "vendor_id": vid, "product_id": pid, "serial_number": sn,
+            "device_type": "STORAGE"
+        }).json()
+        self.assertEqual(chk2["decision"], "ALLOW")
+
+        # 2. Get master allowlist entry ID
+        devs = self.client.get(f"/api/devices?search={sn}").json()
+        self.assertTrue(len(devs) > 0)
+        dev_id = devs[0]["id"]
+
+        # 3. Explicit Permanent Removal via DELETE /api/devices/{id}?permanent=true
+        del_perm = self.client.delete(f"/api/devices/{dev_id}?permanent=true")
+        self.assertEqual(del_perm.status_code, 200)
+        self.assertIn("permanently removed", del_perm.json()["message"].lower())
+
+        # Verify purged from master_allowlist
+        devs_after = self.client.get(f"/api/devices?search={sn}").json()
+        self.assertEqual(len(devs_after), 0)
+
+        # Verify purged from pending_requests
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM pending_requests WHERE vendor_id = ? AND product_id = ? AND serial_number = ?;", (vid, pid, sn))
+            self.assertEqual(cursor.fetchone()[0], 0)
+
+        # 4. Re-insert the same physical peripheral -> MUST go through new-device authorization (ASK/PENDING)
+        reinsert_chk = self.client.post("/api/devices/check-or-request", json={
+            "client_id": "client-perm-test", "vendor_id": vid, "product_id": pid, "serial_number": sn,
+            "device_type": "STORAGE", "description": "Kingston DataTraveler"
+        }).json()
+        self.assertEqual(reinsert_chk["decision"], "ASK")
+        self.assertEqual(reinsert_chk["request_status"], "PENDING")
+
+        # 5. Approve again, then test permanent removal via DELETE /api/requests/{id}
+        new_req_id = reinsert_chk["request_id"]
+        self.client.post(f"/api/requests/{new_req_id}/approve", json={"admin_user": "SecAdmin"})
+        chk_app = self.client.post("/api/devices/check-or-request", json={
+            "client_id": "client-perm-test", "vendor_id": vid, "product_id": pid, "serial_number": sn,
+            "device_type": "STORAGE"
+        }).json()
+        self.assertEqual(chk_app["decision"], "ALLOW")
+
+        del_req_res = self.client.delete(f"/api/requests/{new_req_id}")
+        self.assertEqual(del_req_res.status_code, 200)
+
+        # Re-check MUST NOT auto-approve; master_allowlist entry was purged
+        reinsert_chk2 = self.client.post("/api/devices/check-or-request", json={
+            "client_id": "client-perm-test", "vendor_id": vid, "product_id": pid, "serial_number": sn,
+            "device_type": "STORAGE"
+        }).json()
+        self.assertEqual(reinsert_chk2["decision"], "ASK")
+        self.assertEqual(reinsert_chk2["request_status"], "PENDING")
+
+    def test_40_post_approval_scan_status_synchronization(self):
+        """
+        Verify:
+        1. An approved storage device synchronizes post-approval scan results to pending_requests.
+        2. Algorithms metadata reflects CLEAN, SCANNING, INFECTED, FAILED, and UNAVAILABLE truthfully.
+        """
+        vid, pid, sn = "0781", "5583", "SN-SCAN-SYNC-001"
+
+        # 1. Register and approve
+        chk = self.client.post("/api/devices/check-or-request", json={
+            "client_id": "client-scan-test", "vendor_id": vid, "product_id": pid, "serial_number": sn,
+            "device_type": "STORAGE"
+        }).json()
+        req_id = chk["request_id"]
+        self.client.post(f"/api/requests/{req_id}/approve", json={"admin_user": "SecAdmin"})
+
+        # 2. Client synchronizes completed CLEAN scan telemetry on approved device
+        clean_algo_json = (
+            '{"meta":{"identity_match":true,"admin_authorized":true,'
+            '"malware_scan_result":"CLEAN","executable_policy_status":"COMPLIANT",'
+            '"behavioral_risk_score":0,"reasons":["Media clean"]}}'
+        )
+        sync_res = self.client.post("/api/devices/check-or-request", json={
+            "client_id": "client-scan-test", "vendor_id": vid, "product_id": pid, "serial_number": sn,
+            "device_type": "STORAGE", "algorithms_json": clean_algo_json,
+            "total_risk_score": 0, "severity": "LOW", "recommendation": "APPROVE"
+        }).json()
+        self.assertEqual(sync_res["decision"], "ALLOW")
+
+        # Verify pending_requests now has CLEAN scan status
+        req_record = self.client.get(f"/api/requests/{req_id}").json()
+        self.assertIn('"malware_scan_result":"CLEAN"', req_record["algorithms_json"])
+
+        # 3. Client synchronizes INFECTED scan telemetry
+        infected_algo_json = (
+            '{"meta":{"identity_match":true,"admin_authorized":true,'
+            '"malware_scan_result":"INFECTED","executable_policy_status":"COMPLIANT",'
+            '"exact_threat_evidence":"Trojan:Win32/Wacatac.B!ml","exact_threat_file":"E:\\\\trojan.exe",'
+            '"behavioral_risk_score":60,"reasons":["Malware detected"]}}'
+        )
+        self.client.post("/api/devices/check-or-request", json={
+            "client_id": "client-scan-test", "vendor_id": vid, "product_id": pid, "serial_number": sn,
+            "device_type": "STORAGE", "algorithms_json": infected_algo_json,
+            "total_risk_score": 60, "severity": "HIGH", "recommendation": "REJECT"
+        })
+        req_record2 = self.client.get(f"/api/requests/{req_id}").json()
+        self.assertIn('"malware_scan_result":"INFECTED"', req_record2["algorithms_json"])
+        self.assertIn('Trojan:Win32/Wacatac.B!ml', req_record2["algorithms_json"])
+
+    def test_41_master_allowlist_purged_on_confirmed_critical_threat(self):
+        """
+        Verify:
+        1. An administrator-approved device in master_allowlist is checked.
+        2. If client submits a confirmed critical threat (.exe, .com, or malware: recommendation='REJECT', severity='CRITICAL'),
+           the master_allowlist entry is immediately purged.
+        3. The response returns decision='BLOCK' and request_status='DECLINED'.
+        4. Subsequent checks do NOT return ALLOW.
+        """
+        vid, pid, sn = "0781", "5581", "SN-APPROVED-OVERRIDE-BLOCKED-041"
+
+        # 1. Register and approve device in master_allowlist
+        chk1 = self.client.post("/api/devices/check-or-request", json={
+            "client_id": "client-override-test", "vendor_id": vid, "product_id": pid, "serial_number": sn,
+            "device_type": "STORAGE"
+        }).json()
+        req_id = chk1["request_id"]
+        self.client.post(f"/api/requests/{req_id}/approve", json={"admin_user": "SuperAdmin"})
+
+        # Verify device is now in master_allowlist
+        allow_res = self.client.get(f"/api/devices?search={sn}").json()
+        self.assertEqual(len(allow_res), 1)
+        self.assertEqual(allow_res[0]["status"], "APPROVED")
+
+        # 2. Storage inspection finds prohibited .exe on removable volume -> submits REJECT / CRITICAL
+        threat_json = (
+            '{"meta":{"identity_match":true,"admin_authorized":true,'
+            '"malware_scan_result":"CLEAN","executable_policy_status":"BLOCKED",'
+            '"exact_threat_evidence":"Prohibited executable extension (.exe) detected on removable media: E:\\\\backdoor.exe",'
+            '"exact_threat_file":"E:\\\\backdoor.exe",'
+            '"behavioral_risk_score":85,"reasons":["Prohibited executable (.exe) detected"]}}'
+        )
+        chk_threat = self.client.post("/api/devices/check-or-request", json={
+            "client_id": "client-override-test", "vendor_id": vid, "product_id": pid, "serial_number": sn,
+            "device_type": "STORAGE", "algorithms_json": threat_json,
+            "total_risk_score": 85, "severity": "CRITICAL", "recommendation": "REJECT",
+            "assessment_summary": "Prohibited executable detected on removable storage"
+        }).json()
+
+        # MUST be blocked, NEVER allowed!
+        self.assertEqual(chk_threat["decision"], "BLOCK")
+        self.assertEqual(chk_threat["request_status"], "DECLINED")
+
+        # 3. Master allowlist MUST be purged of this device
+        allow_res2 = self.client.get(f"/api/devices?search={sn}").json()
+        self.assertEqual(len(allow_res2), 0)
+
+        # 4. Subsequent queries MUST NOT return ALLOW
+        chk_after = self.client.post("/api/devices/check-or-request", json={
+            "client_id": "client-override-test", "vendor_id": vid, "product_id": pid, "serial_number": sn,
+            "device_type": "STORAGE"
+        }).json()
+        self.assertNotEqual(chk_after["decision"], "ALLOW")
+
 if __name__ == "__main__":
     unittest.main()
 

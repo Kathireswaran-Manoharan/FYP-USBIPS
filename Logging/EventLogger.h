@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include <mutex>
+#include <chrono>
 
 #include "../Models/USBDevice.h"
 #include "../Models/SecurityEvent.h"
@@ -62,4 +63,10 @@ private:
     std::wstring m_clientId;
     std::mutex m_mutex;
     bool m_initialized;
+
+    // Deduplication tracking for repeated pending inspection events
+    std::wstring m_lastDeviceId;
+    SecurityEventType m_lastType = SecurityEventType::DEVICE_CONNECTED;
+    std::wstring m_lastReason;
+    std::chrono::steady_clock::time_point m_lastLogTime{};
 };

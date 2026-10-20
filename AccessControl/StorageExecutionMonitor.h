@@ -11,6 +11,7 @@
 #include <atomic>
 #include <mutex>
 #include <map>
+#include <unordered_map>
 #include <chrono>
 
 #include "../Models/USBDevice.h"
@@ -141,3 +142,43 @@ private:
     std::wstring m_simulatedPolicyRule;
     std::wstring m_simulatedFailureReason;
 };
+
+// Pre-release storage inspection (checks prohibited .exe/.com executables and antivirus malware scan)
+bool InspectStorageMedia(const USBDevice& device, int maxWaitMs = 10000);
+
+class PendingStorageInspectionManager
+{
+public:
+    static PendingStorageInspectionManager& Instance();
+
+    void SetAllowlistManager(AllowlistManager* allowlist);
+    void RegisterPendingDevice(const USBDevice& device);
+    void UnregisterDevice(const std::wstring& deviceIdOrPath);
+    void OnVolumeArrival();
+    bool HasPendingDevices() const;
+    void Stop();
+
+    ~PendingStorageInspectionManager();
+
+private:
+    struct PendingEntry
+    {
+        USBDevice device;
+        std::chrono::steady_clock::time_point registrationTime;
+        int retryCount = 0;
+    };
+
+    PendingStorageInspectionManager();
+    PendingStorageInspectionManager(const PendingStorageInspectionManager&) = delete;
+    PendingStorageInspectionManager& operator=(const PendingStorageInspectionManager&) = delete;
+
+    void WorkerLoop();
+    void CheckSinglePendingDevice(const USBDevice& dev, int maxRetries);
+
+    mutable std::mutex m_mutex;
+    AllowlistManager* m_allowlist = nullptr;
+    std::unordered_map<std::wstring, PendingEntry> m_pendingDevices;
+    std::atomic<bool> m_workerRunning{ false };
+    std::thread m_workerThread;
+};
+

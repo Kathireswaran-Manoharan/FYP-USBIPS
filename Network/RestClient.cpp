@@ -574,6 +574,8 @@ bool RestClient::FetchPolicyConfig(PolicyConfig& outConfig)
         {
             outConfig.canaryFileName = Utf8ToWide(parsed["canary_file_name"].get<std::string>());
         }
+        outConfig.enforceFolderProtectionOnUsb = parsed.value("enforce_folder_protection_on_usb", outConfig.enforceFolderProtectionOnUsb);
+        outConfig.deactivateProtectionOnUsbRemoval = parsed.value("deactivate_protection_on_usb_removal", outConfig.deactivateProtectionOnUsbRemoval);
 
         outConfig.blockStorageExecution = parsed.value("block_storage_execution", outConfig.blockStorageExecution);
         outConfig.autoTerminateStorageProcesses = parsed.value("auto_terminate_storage_processes", outConfig.autoTerminateStorageProcesses);

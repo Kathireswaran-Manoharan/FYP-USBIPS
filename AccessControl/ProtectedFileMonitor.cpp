@@ -28,9 +28,14 @@
 
 #include <windows.h>
 #include <cfgmgr32.h>
+#include <aclapi.h>
+#include <sddl.h>
 #include <iostream>
 #include <sstream>
 #include <algorithm>
+#include "MinifilterClient.h"
+
+#pragma comment(lib, "advapi32.lib")
 
 // ============================================================
 // Singleton
@@ -116,6 +121,11 @@ bool ProtectedFileMonitor::Start(
 
 void ProtectedFileMonitor::Stop()
 {
+    if (m_isEnforcementActive.load())
+    {
+        DeactivateEnforcement(nullptr);
+    }
+
     if (!m_running.load())
         return;
 
@@ -148,6 +158,18 @@ void ProtectedFileMonitor::ClearActiveDevice()
 {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_hasActiveDevice = false;
+}
+
+bool ProtectedFileMonitor::HasActiveDevice() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_hasActiveDevice;
+}
+
+USBDevice ProtectedFileMonitor::GetActiveDevice() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_activeDevice;
 }
 
 void ProtectedFileMonitor::SetAllowlistManager(AllowlistManager* allowlist)
@@ -665,4 +687,443 @@ void ProtectedFileMonitor::TriggerSimulatedViolation(
     }
 
     RestClient::Instance().ReportPolicyViolation(inc);
+}
+
+// ============================================================
+// OS-Level Protected-Folder Access Restrictions
+// ============================================================
+
+std::wstring ProtectedFileMonitor::GetCurrentUserNameStr()
+{
+    wchar_t name[256] = { 0 };
+    DWORD size = 256;
+    if (GetUserNameW(name, &size))
+    {
+        return name;
+    }
+    return L"";
+}
+
+bool ProtectedFileMonitor::EnforceNativeFolderProtection(
+    const std::wstring& folderPath,
+    const std::wstring& userName,
+    std::wstring& outOriginalSddl)
+{
+    if (folderPath.empty() || userName.empty())
+        return false;
+
+    // Ensure directory exists
+    DWORD attr = GetFileAttributesW(folderPath.c_str());
+    if (attr == INVALID_FILE_ATTRIBUTES)
+    {
+        CreateDirectoryW(folderPath.c_str(), nullptr);
+    }
+
+    PSECURITY_DESCRIPTOR pOldSD = nullptr;
+    PACL pOldDacl = nullptr;
+    DWORD dwRes = GetNamedSecurityInfoW(
+        folderPath.c_str(),
+        SE_FILE_OBJECT,
+        DACL_SECURITY_INFORMATION,
+        nullptr, nullptr, &pOldDacl, nullptr, &pOldSD
+    );
+
+    if (dwRes != ERROR_SUCCESS)
+    {
+        std::wcerr << L"[PFMON-ACL] GetNamedSecurityInfoW failed: " << dwRes << L" for " << folderPath << L"\n";
+        return false;
+    }
+
+    // Export original DACL as SDDL string for lossless restoration
+    LPWSTR sddlStr = nullptr;
+    if (ConvertSecurityDescriptorToStringSecurityDescriptorW(
+            pOldSD, SDDL_REVISION_1, DACL_SECURITY_INFORMATION, &sddlStr, nullptr))
+    {
+        outOriginalSddl = sddlStr;
+        LocalFree(sddlStr);
+    }
+
+    // Build explicit DENY access rule
+    // Deny read data, write data, append data, create files, create folders, execute, and delete
+    EXPLICIT_ACCESS_W ea;
+    ZeroMemory(&ea, sizeof(EXPLICIT_ACCESS_W));
+    ea.grfAccessPermissions = FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE | FILE_DELETE_CHILD;
+    ea.grfAccessMode = DENY_ACCESS;
+    ea.grfInheritance = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE;
+    ea.Trustee.TrusteeForm = TRUSTEE_IS_NAME;
+    ea.Trustee.TrusteeType = TRUSTEE_IS_USER;
+    ea.Trustee.ptstrName = const_cast<LPWSTR>(userName.c_str());
+
+    PACL pNewDacl = nullptr;
+    dwRes = SetEntriesInAclW(1, &ea, pOldDacl, &pNewDacl);
+    if (dwRes != ERROR_SUCCESS)
+    {
+        std::wcerr << L"[PFMON-ACL] SetEntriesInAclW failed: " << dwRes << L"\n";
+        LocalFree(pOldSD);
+        return false;
+    }
+
+    // Apply new DACL to directory
+    dwRes = SetNamedSecurityInfoW(
+        const_cast<LPWSTR>(folderPath.c_str()),
+        SE_FILE_OBJECT,
+        DACL_SECURITY_INFORMATION,
+        nullptr, nullptr, pNewDacl, nullptr
+    );
+
+    LocalFree(pNewDacl);
+    LocalFree(pOldSD);
+
+    if (dwRes != ERROR_SUCCESS)
+    {
+        std::wcerr << L"[PFMON-ACL] SetNamedSecurityInfoW failed: " << dwRes << L"\n";
+        return false;
+    }
+
+    return true;
+}
+
+bool ProtectedFileMonitor::RestoreNativeFolderProtection(
+    const std::wstring& folderPath,
+    const std::wstring& originalSddl)
+{
+    if (folderPath.empty() || originalSddl.empty())
+        return false;
+
+    PSECURITY_DESCRIPTOR pRestoredSD = nullptr;
+    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            originalSddl.c_str(), SDDL_REVISION_1, &pRestoredSD, nullptr))
+    {
+        return false;
+    }
+
+    BOOL daclPresent = FALSE, daclDefaulted = FALSE;
+    PACL pDacl = nullptr;
+    GetSecurityDescriptorDacl(pRestoredSD, &daclPresent, &pDacl, &daclDefaulted);
+
+    DWORD dwRes = SetNamedSecurityInfoW(
+        const_cast<LPWSTR>(folderPath.c_str()),
+        SE_FILE_OBJECT,
+        DACL_SECURITY_INFORMATION,
+        nullptr, nullptr, pDacl, nullptr
+    );
+
+    LocalFree(pRestoredSD);
+    return (dwRes == ERROR_SUCCESS);
+}
+
+bool ProtectedFileMonitor::RevokeUserDenyAce(
+    const std::wstring& folderPath,
+    const std::wstring& userName)
+{
+    if (folderPath.empty() || userName.empty())
+        return false;
+
+    PSECURITY_DESCRIPTOR pOldSD = nullptr;
+    PACL pOldDacl = nullptr;
+    DWORD dwRes = GetNamedSecurityInfoW(
+        folderPath.c_str(),
+        SE_FILE_OBJECT,
+        DACL_SECURITY_INFORMATION,
+        nullptr, nullptr, &pOldDacl, nullptr, &pOldSD
+    );
+
+    if (dwRes != ERROR_SUCCESS)
+        return false;
+
+    EXPLICIT_ACCESS_W ea;
+    ZeroMemory(&ea, sizeof(EXPLICIT_ACCESS_W));
+    ea.grfAccessPermissions = 0;
+    ea.grfAccessMode = REVOKE_ACCESS;
+    ea.grfInheritance = NO_INHERITANCE;
+    ea.Trustee.TrusteeForm = TRUSTEE_IS_NAME;
+    ea.Trustee.TrusteeType = TRUSTEE_IS_USER;
+    ea.Trustee.ptstrName = const_cast<LPWSTR>(userName.c_str());
+
+    PACL pNewDacl = nullptr;
+    dwRes = SetEntriesInAclW(1, &ea, pOldDacl, &pNewDacl);
+    if (dwRes == ERROR_SUCCESS)
+    {
+        dwRes = SetNamedSecurityInfoW(
+            const_cast<LPWSTR>(folderPath.c_str()),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            nullptr, nullptr, pNewDacl, nullptr
+        );
+        LocalFree(pNewDacl);
+    }
+
+    LocalFree(pOldSD);
+    return (dwRes == ERROR_SUCCESS);
+}
+
+bool ProtectedFileMonitor::ActivateEnforcement(const USBDevice* triggeringDevice)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (m_isEnforcementActive.load())
+    {
+        return true;
+    }
+
+    std::wstring userName = GetCurrentUserNameStr();
+    if (userName.empty())
+    {
+        std::wcerr << L"[PFMON-ENFORCE] Cannot determine current user name for ACL enforcement.\n";
+        return false;
+    }
+
+    std::vector<std::wstring> targets;
+    if (!m_configuredFolders.empty())
+    {
+        for (const auto& f : m_configuredFolders)
+        {
+            if (f.isEnabled) targets.push_back(f.folderPath);
+        }
+    }
+    if (targets.empty() && !m_defaultProtectedDir.empty())
+    {
+        targets.push_back(m_defaultProtectedDir);
+    }
+
+    if (targets.empty())
+    {
+        std::wcerr << L"[PFMON-ENFORCE] No protected folders configured for enforcement.\n";
+        return false;
+    }
+
+    bool allSucceeded = true;
+    for (const auto& path : targets)
+    {
+        // Ensure folder and canary exist prior to locking
+        DWORD attr = GetFileAttributesW(path.c_str());
+        if (attr == INVALID_FILE_ATTRIBUTES)
+        {
+            CreateDirectoryW(path.c_str(), nullptr);
+        }
+        std::wstring canary = path + L"\\" + m_canaryFileName;
+        EnsureCanaryFile(canary);
+
+        std::wstring savedSddl;
+        if (EnforceNativeFolderProtection(path, userName, savedSddl))
+        {
+            m_savedFolderSddls[path] = savedSddl;
+            std::wcout << L"[PFMON-ENFORCE] OS-level NTFS protection ACTIVATED on: " << path << L"\n"
+                       << L"                 All Read, Copy, Create, Paste, Overwrite, Rename, and Delete operations DENIED by Windows.\n";
+        }
+        else
+        {
+            allSucceeded = false;
+            std::wcerr << L"[PFMON-ENFORCE] FAILED to apply OS-level NTFS protection on: " << path << L"\n";
+        }
+    }
+
+    // Sync policies to kernel Minifilter driver if loaded
+    if (!m_configuredFolders.empty())
+    {
+        MinifilterClient::Instance().SyncPolicies(m_configuredFolders);
+    }
+
+    if (allSucceeded)
+    {
+        m_isEnforcementActive.store(true);
+
+        std::wstring devInfo = triggeringDevice ? (triggeringDevice->vendorId + L":" + triggeringDevice->productId + L" (" + triggeringDevice->serialNumber + L")") : L"USB_PERIPHERAL";
+        EventLogger::Instance().LogSimpleEvent(
+            SecurityEventType::PROTECTED_FILE_ACCESS,
+            triggeringDevice ? triggeringDevice->deviceId : L"",
+            m_defaultProtectedDir,
+            L"ENFORCE_ACTIVE",
+            L"USB device insertion activated OS-level protected folder restrictions. Device: " + devInfo
+        );
+        return true;
+    }
+    else
+    {
+        EventLogger::Instance().LogSimpleEvent(
+            SecurityEventType::PROTECTED_FILE_ACCESS,
+            triggeringDevice ? triggeringDevice->deviceId : L"",
+            m_defaultProtectedDir,
+            L"ENFORCE_FAILED",
+            L"Failed to apply OS-level protected folder restrictions on one or more folders."
+        );
+        return false;
+    }
+}
+
+bool ProtectedFileMonitor::DeactivateEnforcement(const USBDevice* triggeringDevice)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!m_isEnforcementActive.load())
+    {
+        return true;
+    }
+
+    std::wstring userName = GetCurrentUserNameStr();
+    for (const auto& pair : m_savedFolderSddls)
+    {
+        const std::wstring& path = pair.first;
+        const std::wstring& sddl = pair.second;
+
+        bool restored = RestoreNativeFolderProtection(path, sddl);
+        if (!restored && !userName.empty())
+        {
+            restored = RevokeUserDenyAce(path, userName);
+        }
+
+        if (restored)
+        {
+            std::wcout << L"[PFMON-ENFORCE] OS-level NTFS protection DEACTIVATED on: " << path << L"\n"
+                       << L"                 Normal filesystem access restored.\n";
+        }
+        else
+        {
+            std::wcerr << L"[PFMON-ENFORCE] Failed to restore ACL on: " << path << L"\n";
+        }
+    }
+
+    m_savedFolderSddls.clear();
+    m_isEnforcementActive.store(false);
+
+    std::wstring devInfo = triggeringDevice ? (triggeringDevice->vendorId + L":" + triggeringDevice->productId + L" (" + triggeringDevice->serialNumber + L")") : L"USB_ALL_REMOVED";
+    EventLogger::Instance().LogSimpleEvent(
+        SecurityEventType::PROTECTED_FILE_ACCESS,
+        triggeringDevice ? triggeringDevice->deviceId : L"",
+        m_defaultProtectedDir,
+        L"ENFORCE_DEACTIVATED",
+        L"USB peripheral disconnection deactivated OS-level protected folder restrictions per policy. Device: " + devInfo
+    );
+    return true;
+}
+
+bool ProtectedFileMonitor::IsEnforcementActive() const
+{
+    return m_isEnforcementActive.load();
+}
+
+int ProtectedFileMonitor::GetActiveUsbDeviceCount() const
+{
+    return m_activeUsbDeviceCount;
+}
+
+void ProtectedFileMonitor::OnUsbDeviceConnected(const USBDevice& device)
+{
+    bool doEnforce = false;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_activeUsbDeviceCount++;
+        m_connectedUsbDevices[device.deviceInterfacePath] = device;
+        m_activeDevice = device;
+        m_hasActiveDevice = true;
+        doEnforce = PolicyConfig::Instance().enforceFolderProtectionOnUsb && !m_isEnforcementActive.load();
+    }
+
+    if (doEnforce)
+    {
+        ActivateEnforcement(&device);
+    }
+}
+
+void ProtectedFileMonitor::OnUsbDeviceDisconnected(const std::wstring& devicePath)
+{
+    bool shouldDeactivate = false;
+    USBDevice removedDev;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_connectedUsbDevices.find(devicePath);
+        if (it != m_connectedUsbDevices.end())
+        {
+            removedDev = it->second;
+            m_connectedUsbDevices.erase(it);
+        }
+        if (m_activeUsbDeviceCount > 0)
+        {
+            m_activeUsbDeviceCount--;
+        }
+
+        if (m_connectedUsbDevices.empty() || m_activeUsbDeviceCount == 0)
+        {
+            m_activeUsbDeviceCount = 0;
+            m_hasActiveDevice = false;
+            if (PolicyConfig::Instance().deactivateProtectionOnUsbRemoval && m_isEnforcementActive.load())
+            {
+                shouldDeactivate = true;
+            }
+        }
+    }
+
+    if (shouldDeactivate)
+    {
+        DeactivateEnforcement(&removedDev);
+    }
+    else if (m_isEnforcementActive.load())
+    {
+        std::wcout << L"[PFMON-ENFORCE] USB device removed; protected folder policy configured to remain ACTIVE.\n";
+    }
+}
+
+bool ProtectedFileMonitor::VerifySelfTest()
+{
+    std::wcout << L"  [7.1] Native NTFS Security Descriptor & DACL Enforcement Engine Check...\n";
+    std::wstring user = GetCurrentUserNameStr();
+    if (user.empty())
+    {
+        std::wcerr << L"        [ERROR] Failed to query current process user token.\n";
+        return false;
+    }
+    std::wcout << L"        Current Target User    : " << user << L" [OK]\n";
+
+    // Create a temporary diagnostic folder
+    wchar_t tempPathBuf[MAX_PATH] = { 0 };
+    GetTempPathW(MAX_PATH, tempPathBuf);
+    std::wstring diagFolder = std::wstring(tempPathBuf) + L"usbips_diag_acl_test";
+    CreateDirectoryW(diagFolder.c_str(), nullptr);
+
+    std::wstring diagFile = diagFolder + L"\\audit_canary.txt";
+    HANDLE hf = CreateFileW(diagFile.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr);
+    if (hf != INVALID_HANDLE_VALUE)
+    {
+        const char content[] = "USBIPS Sentinel Data";
+        DWORD written = 0;
+        WriteFile(hf, content, sizeof(content) - 1, &written, nullptr);
+        CloseHandle(hf);
+    }
+
+    std::wstring savedSddl;
+    bool enforceOk = EnforceNativeFolderProtection(diagFolder, user, savedSddl);
+    std::wcout << L"        Apply Deny DACL        : " << (enforceOk ? L"SUCCESS [OK]" : L"FAILED [ERROR]") << L"\n";
+
+    // Test Read Denial
+    HANDLE hRead = CreateFileW(diagFile.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+    bool readDenied = (hRead == INVALID_HANDLE_VALUE && GetLastError() == ERROR_ACCESS_DENIED);
+    if (hRead != INVALID_HANDLE_VALUE) CloseHandle(hRead);
+
+    // Test Create Denial
+    std::wstring newTestFile = diagFolder + L"\\pasted.txt";
+    HANDLE hCreate = CreateFileW(newTestFile.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr);
+    bool createDenied = (hCreate == INVALID_HANDLE_VALUE && GetLastError() == ERROR_ACCESS_DENIED);
+    if (hCreate != INVALID_HANDLE_VALUE) CloseHandle(hCreate);
+
+    // Test Delete Denial
+    bool delSuccess = DeleteFileW(diagFile.c_str());
+    bool deleteDenied = (!delSuccess && GetLastError() == ERROR_ACCESS_DENIED);
+
+    std::wcout << L"        OS Read / Open Denial  : " << (readDenied ? L"DENIED (STATUS_ACCESS_DENIED 5) [OK]" : L"FAILED") << L"\n";
+    std::wcout << L"        OS Paste / Create In   : " << (createDenied ? L"DENIED (STATUS_ACCESS_DENIED 5) [OK]" : L"FAILED") << L"\n";
+    std::wcout << L"        OS Delete / Move Denial: " << (deleteDenied ? L"DENIED (STATUS_ACCESS_DENIED 5) [OK]" : L"FAILED") << L"\n";
+
+    // Restore
+    bool restoreOk = RestoreNativeFolderProtection(diagFolder, savedSddl);
+    std::wcout << L"        Restore Original DACL  : " << (restoreOk ? L"SUCCESS [OK]" : L"FAILED [ERROR]") << L"\n";
+
+    // Verify Read after restore
+    HANDLE hReadAfter = CreateFileW(diagFile.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+    bool readRestored = (hReadAfter != INVALID_HANDLE_VALUE);
+    if (hReadAfter != INVALID_HANDLE_VALUE) CloseHandle(hReadAfter);
+    std::wcout << L"        Access After Restore   : " << (readRestored ? L"PERMITTED [OK]" : L"FAILED") << L"\n";
+
+    // Cleanup
+    DeleteFileW(diagFile.c_str());
+    RemoveDirectoryW(diagFolder.c_str());
+
+    return (enforceOk && readDenied && createDenied && deleteDenied && restoreOk && readRestored);
 }

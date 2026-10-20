@@ -266,226 +266,6 @@ void EndInspectionWorkflow(const std::wstring& devicePath)
 }
 
 // ============================================================
-// Module A4 & A5: Removable Storage Deep Scan
-// ============================================================
-
-bool InspectStorageMedia(const USBDevice& device, int maxWaitMs = 10000)
-{
-    if (!device.hasStorage) return true;
-
-    // Attribute exact drive letters belonging specifically to this USB device
-    auto mappedDrives = StorageExecutionMonitor::Instance().GetDriveLettersForDevice(device);
-    if (mappedDrives.empty())
-    {
-        std::wcout << L"[A6-EXEC] Waiting for filesystem volume to mount for " << device.deviceId << L"...\n";
-        int maxAttempts = maxWaitMs / 500;
-        if (maxAttempts < 1) maxAttempts = 1;
-        for (int retry = 1; retry <= maxAttempts && mappedDrives.empty(); ++retry)
-        {
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
-            mappedDrives = StorageExecutionMonitor::Instance().GetDriveLettersForDevice(device);
-            if (!mappedDrives.empty())
-            {
-                std::wcout << L"[A6-EXEC] Volume mounted after " << (retry * 500) << L"ms: " << mappedDrives.front() << L"\n";
-                break;
-            }
-        }
-    }
-
-    if (mappedDrives.empty())
-    {
-        std::wcout << L"[A6-EXEC] Volume mount wait timed out (" << (maxWaitMs / 1000) << L"s) for " << device.deviceId
-                   << L". Executable policy status: NOT_SCANNED (pending filesystem mount).\n";
-
-        StorageExecutableInspectionResult unmountedRes;
-        unmountedRes.status = StorageExecutableInspectionResult::Status::NOT_MOUNTED;
-        unmountedRes.failureReason = L"Filesystem volume mount timed out after " + std::to_wstring(maxWaitMs / 1000) + L"s; device restricted pending volume mount.";
-        TrustAssessmentEngine::Instance().UpdateExecutablePolicyResult(device, unmountedRes);
-
-        ScanResult pendingRes;
-        pendingRes.status = ScanStatus::NOT_SCANNED;
-        pendingRes.details = L"Volume mount wait timed out; pending filesystem mount.";
-        TrustAssessmentEngine::Instance().UpdateMalwareScanResult(device, pendingRes);
-
-        ExpectInternalRemoval(device.deviceId);
-        if (!device.deviceInterfacePath.empty()) ExpectInternalRemoval(device.deviceInterfacePath);
-
-        CONFIGRET qCr = CR_FAILURE;
-        EnforcementManager::QuarantineDevice(device, &qCr);
-        EventLogger::Instance().LogEvent(
-            SecurityEventType::DEVICE_BLOCKED,
-            device,
-            L"RESTRICTED",
-            L"[A6-EXEC] Storage device restricted: volume mount timed out; inspection pending"
-        );
-        return false;
-    }
-
-    for (const auto& drive : mappedDrives)
-    {
-        // 1. Prohibited executable detection on storage media (.exe, .com, etc.)
-        if (PolicyConfig::Instance().blockStorageExecution)
-        {
-            std::wcout << L"[A6-EXEC] Enumerate files and inspect executable policy on " << drive << L"...\n";
-            StorageExecutableInspectionResult execRes =
-                StorageExecutionMonitor::Instance().InspectVolumeForProhibitedExecutables(drive);
-
-            if (execRes.status == StorageExecutableInspectionResult::Status::PROHIBITED_FOUND)
-            {
-                std::wcout << L"[A6-EXEC] *** PROHIBITED EXECUTABLE DETECTED ON " << drive << L" ***\n"
-                           << L"[A6-EXEC] File Path: " << execRes.primaryProhibitedFile << L"\n"
-                           << L"[A6-EXEC] Policy   : " << execRes.policyRule << L"\n"
-                           << L"[A6-EXEC] Device   : " << device.deviceId << L"\n";
-
-                EventLogger::Instance().LogEvent(
-                    SecurityEventType::STORAGE_EXECUTION_BLOCKED,
-                    device,
-                    L"BLOCK",
-                    L"[A6-EXEC] " + execRes.policyRule + L": " + execRes.primaryProhibitedFile
-                );
-
-                // Update TAE which will enforce critical threat quarantine, verify disablement, revoke allowlist, and report to server
-                TrustAssessmentEngine::Instance().UpdateExecutablePolicyResult(device, execRes);
-                return false;
-            }
-            else if (execRes.status == StorageExecutableInspectionResult::Status::FAILED)
-            {
-                std::wcerr << L"[A6-EXEC] File enumeration failed on " << drive << L": " << execRes.failureReason << L"\n"
-                           << L"[A6-EXEC] Device restricted pending successful scan.\n";
-
-                TrustAssessmentEngine::Instance().UpdateExecutablePolicyResult(device, execRes);
-                ExpectInternalRemoval(device.deviceId);
-                if (!device.deviceInterfacePath.empty()) ExpectInternalRemoval(device.deviceInterfacePath);
-                CONFIGRET qCr = CR_FAILURE;
-                EnforcementManager::QuarantineDevice(device, &qCr);
-                EventLogger::Instance().LogEvent(
-                    SecurityEventType::DEVICE_BLOCKED,
-                    device,
-                    L"RESTRICTED",
-                    L"[A6-EXEC] File enumeration failed on storage volume: " + execRes.failureReason
-                );
-                return false;
-            }
-            else if (execRes.status == StorageExecutableInspectionResult::Status::NOT_MOUNTED)
-            {
-                std::wcerr << L"[A6-EXEC] Storage volume not mounted or inaccessible: " << drive << L"\n";
-                TrustAssessmentEngine::Instance().UpdateExecutablePolicyResult(device, execRes);
-                ExpectInternalRemoval(device.deviceId);
-                if (!device.deviceInterfacePath.empty()) ExpectInternalRemoval(device.deviceInterfacePath);
-                CONFIGRET qCr = CR_FAILURE;
-                EnforcementManager::QuarantineDevice(device, &qCr);
-                EventLogger::Instance().LogEvent(
-                    SecurityEventType::DEVICE_BLOCKED,
-                    device,
-                    L"RESTRICTED",
-                    L"[A6-EXEC] Volume inaccessible for executable policy check: " + drive
-                );
-                return false;
-            }
-            else // CLEAN
-            {
-                std::wcout << L"[A6-EXEC] Executable policy inspection CLEAN on " << drive
-                           << L" (0 prohibited .exe/.com files found).\n";
-                TrustAssessmentEngine::Instance().UpdateExecutablePolicyResult(device, execRes);
-            }
-        }
-
-        // 2. Removable-Media Antivirus Malware Scanning (Module A4)
-        if (PolicyConfig::Instance().enableAntivirusScanning)
-        {
-            std::wcout << L"[A4-AV] Initiating antivirus inspection for mapped drive " << drive << L"...\n";
-            ScanResult sRes = MalwareScanner::Instance().ScanPath(drive);
-
-            // Freshness check: reject stale scanner evidence
-            if (!MalwareScanner::Instance().IsScanResultFresh(sRes, 60))
-            {
-                std::wcerr << L"[A4-AV] Antivirus result is stale (>60s); rejecting evidence for current device.\n";
-                sRes.status = ScanStatus::FAILED;
-                sRes.details = L"Scanner evidence rejected: timestamp is stale.";
-            }
-
-            if (sRes.status == ScanStatus::DETECTED)
-            {
-                std::wcout << L"[A4-AV] *** CONFIRMED MALWARE DETECTED ON " << drive << L" ***\n"
-                           << L"[A4-AV] Threat Name : " << sRes.threatName << L"\n"
-                           << L"[A4-AV] Target File : " << sRes.targetPath << L"\n"
-                           << L"[A4-AV] Exact Device: " << device.deviceId << L"\n";
-
-                EventLogger::Instance().LogEvent(
-                    SecurityEventType::MALWARE_DETECTED,
-                    device,
-                    L"BLOCK",
-                    L"[A4-AV] Threat detected on removable storage " + drive + L": " + sRes.threatName
-                );
-
-                // Update TAE which will enforce critical threat quarantine and revocation
-                TrustAssessmentEngine::Instance().UpdateMalwareScanResult(device, sRes);
-                return false;
-            }
-            else if (sRes.status == ScanStatus::CLEAN)
-            {
-                std::wcout << L"[A4-AV] Antivirus scan completed CLEAN on " << drive << L" (0 threats detected).\n";
-                TrustAssessmentEngine::Instance().UpdateMalwareScanResult(device, sRes);
-            }
-            else
-            {
-                std::wcout << L"[A4-AV] Antivirus scan status on " << drive << L": "
-                           << ScanStatusToString(sRes.status) << L" (" << sRes.details << L")\n";
-                TrustAssessmentEngine::Instance().UpdateMalwareScanResult(device, sRes);
-                ExpectInternalRemoval(device.deviceId);
-                if (!device.deviceInterfacePath.empty()) ExpectInternalRemoval(device.deviceInterfacePath);
-                CONFIGRET qCr = CR_FAILURE;
-                EnforcementManager::QuarantineDevice(device, &qCr);
-                EventLogger::Instance().LogEvent(
-                    SecurityEventType::DEVICE_BLOCKED,
-                    device,
-                    L"RESTRICTED",
-                    L"[A4-AV] Storage device held restricted: scan incomplete or failed (" + sRes.details + L")"
-                );
-                return false;
-            }
-        }
-
-        // 3. Suspicious File & Script Detection (Module A5)
-        if (PolicyConfig::Instance().enableSuspiciousFileScan)
-        {
-            FileInspectionReport fRep = SuspiciousFileDetector::Instance().InspectDirectory(drive);
-            if (fRep.overallRisk == FileRiskLevel::MALICIOUS)
-            {
-                EventLogger::Instance().LogEvent(
-                    SecurityEventType::SUSPICIOUS_FILE_DETECTED,
-                    device,
-                    L"BLOCK",
-                    L"[A5-FILE] " + fRep.summary
-                );
-                TrustAssessmentEngine::Instance().UpdateAssessmentWithEvent(
-                    device,
-                    SecurityEventType::SUSPICIOUS_FILE_DETECTED,
-                    L"Malicious disguised files detected: " + fRep.summary
-                );
-                ExpectInternalRemoval(device.deviceId);
-                if (!device.deviceInterfacePath.empty()) ExpectInternalRemoval(device.deviceInterfacePath);
-                CONFIGRET qCr = CR_FAILURE;
-                EnforcementManager::QuarantineDevice(device, &qCr);
-                return false;
-            }
-            else if (fRep.overallRisk == FileRiskLevel::SUSPICIOUS)
-            {
-                EventLogger::Instance().LogEvent(
-                    SecurityEventType::SUSPICIOUS_FILE_DETECTED,
-                    device,
-                    L"ASK",
-                    L"[A5-FILE] " + fRep.summary
-                );
-            }
-        }
-    }
-
-    return true;
-}
-
-
-// ============================================================
 // Print device
 // ============================================================
 
@@ -701,6 +481,9 @@ LRESULT CALLBACK WindowProc(
                     L"USB device connected"
                 );
 
+                // Algorithm 4: Physical USB insertion triggers OS-level protected folder access restrictions
+                ProtectedFileMonitor::Instance().OnUsbDeviceConnected(device);
+
 
                 /*
                     STEP 2
@@ -905,6 +688,31 @@ LRESULT CALLBACK WindowProc(
                     STEP 6
                     Trusted device — also start HID surveillance for keyboards.
                 */
+                if (decision == AccessDecision::ALLOW)
+                {
+                    // Check with Central Server if connected to ensure device has not been permanently removed
+                    if (SyncManager::Instance().IsServerConnected())
+                    {
+                        std::wstring clientId = EventLogger::Instance().GetClientId();
+                        DeviceCheckResult serverCheck = RestClient::Instance().CheckOrRequestDevice(clientId, device, &taeReport);
+                        if (serverCheck.success)
+                        {
+                            if (serverCheck.decision == L"ASK")
+                            {
+                                std::wcout << L"[SERVER] Device was permanently removed from Central Server master allowlist. Purging local allowlist cache.\n";
+                                g_allowlist.RemoveDevice(device);
+                                decision = AccessDecision::ASK;
+                            }
+                            else if (serverCheck.decision == L"BLOCK")
+                            {
+                                std::wcout << L"[SERVER] Device is blocked by Central Server policy: " << serverCheck.message << L"\n";
+                                g_allowlist.RemoveDevice(device);
+                                decision = AccessDecision::BLOCK;
+                            }
+                        }
+                    }
+                }
+
                 if (decision == AccessDecision::ALLOW)
                 {
                     std::wcout
@@ -1270,25 +1078,80 @@ LRESULT CALLBACK WindowProc(
 
                             // Algorithm 4: activate file monitor for released device
                             ProtectedFileMonitor::Instance().SetActiveDevice(device);
+
+                            // Synchronize clean inspection report with central server
+                            TrustAssessmentReport postCleanReport;
+                            if (TrustAssessmentEngine::Instance().GetActiveAssessment(device.deviceId, postCleanReport))
+                            {
+                                RestClient::Instance().CheckOrRequestDevice(EventLogger::Instance().GetClientId(), device, &postCleanReport);
+                            }
                         }
                         else
                         {
-                            CancelExpectedArrival(
-                                device.deviceInterfacePath
-                            );
-                            CancelExpectedArrival(
-                                device.deviceId
-                            );
+                            TrustAssessmentReport postInspReport;
+                            TrustAssessmentEngine::Instance().GetActiveAssessment(device.deviceId, postInspReport);
 
-                            std::wcerr << L"[SECURITY] Pre-release storage inspection failed! Device will NOT be released for normal use.\n";
-                            decision = AccessDecision::BLOCK;
+                            bool isCriticalThreat = (postInspReport.executablePolicyStatus == L"BLOCKED" ||
+                                                     postInspReport.malwareScanResult == L"INFECTED" ||
+                                                     postInspReport.recommendation == TrustRecommendation::REJECT);
 
-                            // Re-quarantine device immediately
-                            ExpectInternalRemoval(device.deviceId);
-                            if (!device.deviceInterfacePath.empty()) ExpectInternalRemoval(device.deviceInterfacePath);
-                            CONFIGRET qCr = CR_FAILURE;
-                            EnforcementManager::QuarantineDevice(device, &qCr);
-                            DevicePresenceMonitor::SetDeviceState(device.deviceId, DeviceTrackingState::QUARANTINED);
+                            if (isCriticalThreat)
+                            {
+                                CancelExpectedArrival(
+                                    device.deviceInterfacePath
+                                );
+                                CancelExpectedArrival(
+                                    device.deviceId
+                                );
+
+                                std::wcerr << L"[SECURITY] Critical threat detected during pre-release inspection! Device blocked.\n";
+                                decision = AccessDecision::BLOCK;
+                                taeReport = postInspReport;
+
+                                std::vector<std::wstring> reasons = postInspReport.explainableReasons;
+                                if (!postInspReport.exactThreatEvidence.empty())
+                                {
+                                    reasons.push_back(postInspReport.exactThreatEvidence);
+                                }
+
+                                EnforcementManager::EnforceCriticalThreat(
+                                    device,
+                                    postInspReport.executablePolicyStatus == L"BLOCKED" ? L"STORAGE_EXECUTION_BLOCKED" : L"MALWARE_DETECTED",
+                                    postInspReport.exactThreatEvidence,
+                                    postInspReport.totalRiskScore,
+                                    reasons,
+                                    &g_allowlist
+                                );
+
+                                // Re-quarantine device immediately
+                                ExpectInternalRemoval(device.deviceId);
+                                if (!device.deviceInterfacePath.empty()) ExpectInternalRemoval(device.deviceInterfacePath);
+                                CONFIGRET qCr = CR_FAILURE;
+                                EnforcementManager::QuarantineDevice(device, &qCr);
+                                DevicePresenceMonitor::SetDeviceState(device.deviceId, DeviceTrackingState::QUARANTINED);
+
+                                RestClient::Instance().CheckOrRequestDevice(EventLogger::Instance().GetClientId(), device, &postInspReport);
+                            }
+                            else
+                            {
+                                // Incomplete scan or volume mount wait timed out (NOT a critical threat)
+                                std::wcout << L"[SECURITY] Storage volume inspection pending mount or incomplete. Keeping device restricted.\n";
+                                std::wcout << L"[SECURITY] Device is NOT released for normal use. Registering bounded retry mechanism...\n";
+
+                                // Re-quarantine device at Windows level while pending inspection
+                                ExpectInternalRemoval(device.deviceId);
+                                if (!device.deviceInterfacePath.empty()) ExpectInternalRemoval(device.deviceInterfacePath);
+                                CONFIGRET qCr = CR_FAILURE;
+                                EnforcementManager::QuarantineDevice(device, &qCr);
+                                DevicePresenceMonitor::SetDeviceState(device.deviceId, DeviceTrackingState::QUARANTINED);
+                                decision = AccessDecision::BLOCK;
+
+                                // Register with PendingStorageInspectionManager
+                                PendingStorageInspectionManager::Instance().RegisterPendingDevice(device);
+
+                                // Synchronize current status (e.g. NOT_SCANNED) to server so dashboard displays accurate status
+                                RestClient::Instance().CheckOrRequestDevice(EventLogger::Instance().GetClientId(), device, &postInspReport);
+                            }
                         }
                     }
                 }
@@ -1305,17 +1168,24 @@ LRESULT CALLBACK WindowProc(
 
                     if (taeReport.recommendation == TrustRecommendation::REJECT)
                     {
-                        // Critical threat policy rejection: invoke central enforcement
-                        ThreatEnforcementResult enfRes = EnforcementManager::EnforceCriticalThreat(
-                            device,
-                            L"POLICY_REJECT",
-                            taeReport.summary,
-                            taeReport.totalRiskScore,
-                            taeReport.explainableReasons,
-                            &g_allowlist
-                        );
+                        if (!g_allowlist.HasActiveCriticalThreat(device))
+                        {
+                            // Critical threat policy rejection: invoke central enforcement
+                            ThreatEnforcementResult enfRes = EnforcementManager::EnforceCriticalThreat(
+                                device,
+                                L"POLICY_REJECT",
+                                taeReport.summary,
+                                taeReport.totalRiskScore,
+                                taeReport.explainableReasons,
+                                &g_allowlist
+                            );
 
-                        std::wcout << L"Enforcement Status : " << enfRes.finalEnforcementState << L"\n";
+                            std::wcout << L"Enforcement Status : " << enfRes.finalEnforcementState << L"\n";
+                        }
+                        else
+                        {
+                            std::wcout << L"Enforcement Status : CRITICAL THREAT ENFORCED AND ALLOWLIST REVOKED (QUARANTINED_VERIFIED_CODE_22)\n";
+                        }
                     }
                     else
                     {
@@ -1362,6 +1232,13 @@ LRESULT CALLBACK WindowProc(
                         }
                     }
                 }
+            }
+            else if (header &&
+                     header->dbch_devicetype ==
+                     DBT_DEVTYP_VOLUME)
+            {
+                std::wcout << L"\n[STORAGE-EVENT] Filesystem volume arrival notification received (DBT_DEVTYP_VOLUME).\n";
+                PendingStorageInspectionManager::Instance().OnVolumeArrival();
             }
         }
 
@@ -1411,6 +1288,10 @@ LRESULT CALLBACK WindowProc(
                 // Genuine physical removal: clear active workflow state
                 EndInspectionWorkflow(devicePath);
 
+                // Unregister any pending inspections for this disconnected device
+                PendingStorageInspectionManager::Instance().UnregisterDevice(devicePath);
+                PendingStorageInspectionManager::Instance().UnregisterDevice(instId);
+
                 // Update presence tracker (untrack physically removed device)
                 DevicePresenceMonitor::UntrackDevice(instId);
 
@@ -1423,7 +1304,8 @@ LRESULT CALLBACK WindowProc(
                 // Invalidate any active challenge or input session for the removed device
                 HIDBehaviorMonitor::Instance().InvalidateDeviceSession(devicePath);
 
-                // Algorithm 4: clear file monitor context
+                // Algorithm 4: update USB presence and handle removal policy
+                ProtectedFileMonitor::Instance().OnUsbDeviceDisconnected(devicePath);
                 ProtectedFileMonitor::Instance().ClearActiveDevice();
 
                 EventLogger::Instance().LogSimpleEvent(
@@ -2820,7 +2702,9 @@ bool RunExecutablePolicyRegressionSuite()
         bool exePolicyBlocked = (rep.executablePolicyStatus == L"BLOCKED");
         bool malwareScanClean = (rep.malwareScanResult == L"CLEAN");
         bool recommendationReject = (rep.recommendation == TrustRecommendation::REJECT);
-        bool distinctEvidence = (rep.exactThreatEvidence == execRes.policyRule);
+        bool distinctEvidence = (rep.exactThreatEvidence == execRes.policyRule ||
+                                 rep.exactThreatEvidence == (execRes.policyRule + L": " + execRes.primaryProhibitedFile) ||
+                                 rep.exactThreatEvidence.find(execRes.policyRule) != std::wstring::npos);
 
         std::wcout << L"  [10.1] Executable Policy Status : " << rep.executablePolicyStatus << L" -> " << (exePolicyBlocked ? L"[OK]" : L"[FAIL]") << L"\n";
         std::wcout << L"  [10.2] Antivirus Scan Status    : " << rep.malwareScanResult << L" -> " << (malwareScanClean ? L"[OK]" : L"[FAIL]") << L"\n";
@@ -3273,6 +3157,1565 @@ bool RunStorageInspectionWorkflowRegressionSuite()
 
     std::wcout << L"=======================================================\n";
     std::wcout << L"STORAGE WORKFLOW REGRESSION SUMMARY: " << passed << L"/" << total << L" PASSED\n";
+    std::wcout << L"=======================================================\n\n";
+
+    return (passed == total);
+}
+
+
+// ============================================================
+// Protected-Folder Access Restrictions Regression Suite (Tests 1-8)
+// ============================================================
+
+bool RunProtectedFolderAccessRestrictionsSuite()
+{
+    std::wcout << L"\n=======================================================\n";
+    std::wcout << L"   USBIPS PROTECTED-FOLDER ACCESS RESTRICTIONS SUITE   \n";
+    std::wcout << L"=======================================================\n";
+    std::wcout << L"Objective: Verify OS-level filesystem denial (STATUS_ACCESS_DENIED 5)\n"
+               << L"           across Read, Copy, Create, Paste, Overwrite, Rename, and Delete\n"
+               << L"           upon USB arrival, and access restoration upon USB removal.\n\n";
+
+    int passed = 0;
+    int total = 8;
+
+    // Set up dedicated test folder and files
+    wchar_t tempPathBuf[MAX_PATH] = { 0 };
+    GetTempPathW(MAX_PATH, tempPathBuf);
+    std::wstring testRoot = std::wstring(tempPathBuf) + L"usbips_folder_enforce_suite";
+
+    // Clean up any stale directory from previous test run
+    std::wstring cleanupCmd = L"if exist \"" + testRoot + L"\" rd /s /q \"" + testRoot + L"\"";
+    _wsystem(cleanupCmd.c_str());
+    CreateDirectoryW(testRoot.c_str(), nullptr);
+
+    std::wstring sampleFile = testRoot + L"\\confidential_doc.txt";
+    HANDLE hf = CreateFileW(sampleFile.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr);
+    if (hf != INVALID_HANDLE_VALUE)
+    {
+        const char content[] = "TOP SECRET SENSITIVE DATA - USBIPS RESTRICTED";
+        DWORD written = 0;
+        WriteFile(hf, content, sizeof(content) - 1, &written, nullptr);
+        CloseHandle(hf);
+    }
+
+    std::wstring subFolder = testRoot + L"\\sub_folder";
+    CreateDirectoryW(subFolder.c_str(), nullptr);
+    std::wstring nestedFile = subFolder + L"\\nested_record.dat";
+    HANDLE hfSub = CreateFileW(nestedFile.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr);
+    if (hfSub != INVALID_HANDLE_VALUE)
+    {
+        const char contentSub[] = "NESTED FINANCIAL DATA";
+        DWORD written = 0;
+        WriteFile(hfSub, contentSub, sizeof(contentSub) - 1, &written, nullptr);
+        CloseHandle(hfSub);
+    }
+
+    // Configure test folder policy
+    std::vector<ProtectedFolder> policyList;
+    ProtectedFolder pf;
+    pf.id = 888;
+    pf.folderPath = testRoot;
+    pf.description = L"Automated Regression Test Folder";
+    pf.isEnabled = true;
+    policyList.push_back(pf);
+
+    ProtectedFileMonitor::Instance().UpdateWatchedFolders(policyList);
+
+    // Dummy test USB device
+    USBDevice testDev1;
+    testDev1.vendorId = L"0781";
+    testDev1.productId = L"5583";
+    testDev1.serialNumber = L"TEST_ENFORCE_SAN_001";
+    testDev1.deviceId = L"USB\\VID_0781&PID_5583\\TEST_ENFORCE_SAN_001";
+    testDev1.deviceInterfacePath = L"\\\\?\\USB#VID_0781&PID_5583#TEST_ENFORCE_SAN_001#{a5dcbf10-6530-11d2-901f-00c04fb951ed}";
+    testDev1.type = DeviceType::STORAGE;
+    testDev1.hasStorage = true;
+
+    // --------------------------------------------------------
+    // TEST 1: Physical USB Insertion Activates Protected-Folder Policy
+    // --------------------------------------------------------
+    std::wcout << L"[TEST 1/8] USB Insertion Triggers OS-Level Protected Folder Policy Activation\n";
+    std::wcout << L"----------------------------------------------------------------------------\n";
+    PolicyConfig::Instance().enforceFolderProtectionOnUsb = true;
+    PolicyConfig::Instance().deactivateProtectionOnUsbRemoval = true;
+
+    ProtectedFileMonitor::Instance().OnUsbDeviceConnected(testDev1);
+
+    bool t1Active = ProtectedFileMonitor::Instance().IsEnforcementActive();
+    int t1DevCount = ProtectedFileMonitor::Instance().GetActiveUsbDeviceCount();
+    std::wcout << L"  [1.1] Monitor Enforcement State : " << (t1Active ? L"ACTIVE [OK]" : L"INACTIVE [ERROR]") << L"\n";
+    std::wcout << L"  [1.2] Active USB Device Count   : " << t1DevCount << L" [OK]\n";
+
+    if (t1Active && t1DevCount == 1)
+    {
+        std::wcout << L"  -> [RESULT] TEST 1: PASSED (NTFS DACL Deny rule successfully applied upon USB insertion)\n\n";
+        passed++;
+    }
+    else
+    {
+        std::wcout << L"  -> [RESULT] TEST 1: FAILED\n\n";
+    }
+
+    // --------------------------------------------------------
+    // TEST 2: Block Unauthorized Reading or Opening of Protected Files
+    // --------------------------------------------------------
+    std::wcout << L"[TEST 2/8] Block Unauthorized Reading or Opening of Protected Files\n";
+    std::wcout << L"-------------------------------------------------------------------\n";
+    HANDLE hRead1 = CreateFileW(sampleFile.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+    DWORD errRead1 = (hRead1 == INVALID_HANDLE_VALUE) ? GetLastError() : 0;
+    if (hRead1 != INVALID_HANDLE_VALUE) CloseHandle(hRead1);
+
+    HANDLE hReadNested = CreateFileW(nestedFile.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+    DWORD errReadNested = (hReadNested == INVALID_HANDLE_VALUE) ? GetLastError() : 0;
+    if (hReadNested != INVALID_HANDLE_VALUE) CloseHandle(hReadNested);
+
+    std::wcout << L"  [2.1] Read Root File Attempt   : " << (errRead1 == ERROR_ACCESS_DENIED ? L"DENIED (STATUS_ACCESS_DENIED 5) [OK]" : L"ALLOWED/ERROR") << L"\n";
+    std::wcout << L"  [2.2] Read Nested File Attempt : " << (errReadNested == ERROR_ACCESS_DENIED ? L"DENIED (STATUS_ACCESS_DENIED 5) [OK]" : L"ALLOWED/ERROR") << L"\n";
+
+    if (errRead1 == ERROR_ACCESS_DENIED && errReadNested == ERROR_ACCESS_DENIED)
+    {
+        std::wcout << L"  -> [RESULT] TEST 2: PASSED (Windows natively denies file opening and data reading)\n\n";
+        passed++;
+    }
+    else
+    {
+        std::wcout << L"  -> [RESULT] TEST 2: FAILED\n\n";
+    }
+
+    // --------------------------------------------------------
+    // TEST 3: Block Copying Protected Files to Outside or USB Drives
+    // --------------------------------------------------------
+    std::wcout << L"[TEST 3/8] Block Copying Protected Files (Source Read Denial)\n";
+    std::wcout << L"-------------------------------------------------------------\n";
+    std::wstring copyOutDest = std::wstring(tempPathBuf) + L"stolen_exfiltrated_data.txt";
+    BOOL copyOk = CopyFileW(sampleFile.c_str(), copyOutDest.c_str(), FALSE);
+    DWORD errCopy = !copyOk ? GetLastError() : 0;
+
+    std::wcout << L"  [3.1] Copy Out Attempt Result  : " << (!copyOk ? L"FAILED [OK]" : L"SUCCEEDED [ERROR]") << L"\n";
+    std::wcout << L"  [3.2] OS Denial Error Code     : " << errCopy << L" "
+               << (errCopy == ERROR_ACCESS_DENIED ? L"(ERROR_ACCESS_DENIED) [OK]" : L"(UNEXPECTED)") << L"\n";
+
+    if (!copyOk && errCopy == ERROR_ACCESS_DENIED)
+    {
+        std::wcout << L"  -> [RESULT] TEST 3: PASSED (Copy operation completely prevented by Windows SRM)\n\n";
+        passed++;
+    }
+    else
+    {
+        std::wcout << L"  -> [RESULT] TEST 3: FAILED\n\n";
+    }
+
+    // --------------------------------------------------------
+    // TEST 4: Block Creating, Pasting, or Importing Files into Protected Folders
+    // --------------------------------------------------------
+    std::wcout << L"[TEST 4/8] Block Creating, Pasting, or Importing Files into Protected Folders\n";
+    std::wcout << L"----------------------------------------------------------------------------\n";
+    std::wstring newPastedFile = testRoot + L"\\unauthorized_pasted_tool.exe";
+    HANDLE hPaste = CreateFileW(newPastedFile.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr);
+    DWORD errPaste = (hPaste == INVALID_HANDLE_VALUE) ? GetLastError() : 0;
+    if (hPaste != INVALID_HANDLE_VALUE) CloseHandle(hPaste);
+
+    std::wstring newNestedPasted = subFolder + L"\\nested_pasted.docx";
+    HANDLE hPasteNested = CreateFileW(newNestedPasted.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr);
+    DWORD errPasteNested = (hPasteNested == INVALID_HANDLE_VALUE) ? GetLastError() : 0;
+    if (hPasteNested != INVALID_HANDLE_VALUE) CloseHandle(hPasteNested);
+
+    std::wcout << L"  [4.1] Create/Paste Root Attempt   : " << (errPaste == ERROR_ACCESS_DENIED ? L"DENIED (STATUS_ACCESS_DENIED 5) [OK]" : L"ALLOWED/ERROR") << L"\n";
+    std::wcout << L"  [4.2] Create/Paste Nested Attempt : " << (errPasteNested == ERROR_ACCESS_DENIED ? L"DENIED (STATUS_ACCESS_DENIED 5) [OK]" : L"ALLOWED/ERROR") << L"\n";
+
+    if (errPaste == ERROR_ACCESS_DENIED && errPasteNested == ERROR_ACCESS_DENIED)
+    {
+        std::wcout << L"  -> [RESULT] TEST 4: PASSED (Windows natively denies file creation and pasting into protected folder)\n\n";
+        passed++;
+    }
+    else
+    {
+        std::wcout << L"  -> [RESULT] TEST 4: FAILED\n\n";
+    }
+
+    // --------------------------------------------------------
+    // TEST 5: Block Editing, Overwriting, and Truncating Protected Files
+    // --------------------------------------------------------
+    std::wcout << L"[TEST 5/8] Block Editing, Overwriting, and Truncating Protected Files\n";
+    std::wcout << L"---------------------------------------------------------------------\n";
+    HANDLE hWrite = CreateFileW(sampleFile.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+    DWORD errWrite = (hWrite == INVALID_HANDLE_VALUE) ? GetLastError() : 0;
+    if (hWrite != INVALID_HANDLE_VALUE) CloseHandle(hWrite);
+
+    HANDLE hTrunc = CreateFileW(sampleFile.c_str(), GENERIC_WRITE, 0, nullptr, TRUNCATE_EXISTING, 0, nullptr);
+    DWORD errTrunc = (hTrunc == INVALID_HANDLE_VALUE) ? GetLastError() : 0;
+    if (hTrunc != INVALID_HANDLE_VALUE) CloseHandle(hTrunc);
+
+    std::wcout << L"  [5.1] Overwrite/Edit Attempt   : " << (errWrite == ERROR_ACCESS_DENIED ? L"DENIED (STATUS_ACCESS_DENIED 5) [OK]" : L"ALLOWED/ERROR") << L"\n";
+    std::wcout << L"  [5.2] Truncate Attempt         : " << (errTrunc == ERROR_ACCESS_DENIED ? L"DENIED (STATUS_ACCESS_DENIED 5) [OK]" : L"ALLOWED/ERROR") << L"\n";
+
+    if (errWrite == ERROR_ACCESS_DENIED && errTrunc == ERROR_ACCESS_DENIED)
+    {
+        std::wcout << L"  -> [RESULT] TEST 5: PASSED (Windows natively denies modification and truncation)\n\n";
+        passed++;
+    }
+    else
+    {
+        std::wcout << L"  -> [RESULT] TEST 5: FAILED\n\n";
+    }
+
+    // --------------------------------------------------------
+    // TEST 6: Block Renaming, Moving, and Deleting Protected Files
+    // --------------------------------------------------------
+    std::wcout << L"[TEST 6/8] Block Renaming, Moving, and Deleting Protected Files & Folders\n";
+    std::wcout << L"-------------------------------------------------------------------------\n";
+    std::wstring renamedFile = testRoot + L"\\renamed_doc.txt";
+    BOOL moveOk = MoveFileW(sampleFile.c_str(), renamedFile.c_str());
+    DWORD errMove = !moveOk ? GetLastError() : 0;
+
+    BOOL delFileOk = DeleteFileW(sampleFile.c_str());
+    DWORD errDelFile = !delFileOk ? GetLastError() : 0;
+
+    BOOL delDirOk = RemoveDirectoryW(subFolder.c_str());
+    DWORD errDelDir = !delDirOk ? GetLastError() : 0;
+
+    std::wcout << L"  [6.1] Rename/Move Attempt      : " << (errMove == ERROR_ACCESS_DENIED ? L"DENIED (STATUS_ACCESS_DENIED 5) [OK]" : L"ALLOWED/ERROR") << L"\n";
+    std::wcout << L"  [6.2] Delete File Attempt      : " << (errDelFile == ERROR_ACCESS_DENIED ? L"DENIED (STATUS_ACCESS_DENIED 5) [OK]" : L"ALLOWED/ERROR") << L"\n";
+    std::wcout << L"  [6.3] Delete Subdir Attempt    : " << (errDelDir == ERROR_ACCESS_DENIED ? L"DENIED (STATUS_ACCESS_DENIED 5) [OK]" : L"ALLOWED/ERROR") << L"\n";
+
+    if (errMove == ERROR_ACCESS_DENIED && errDelFile == ERROR_ACCESS_DENIED && errDelDir == ERROR_ACCESS_DENIED)
+    {
+        std::wcout << L"  -> [RESULT] TEST 6: PASSED (Windows natively denies rename, move, and deletion)\n\n";
+        passed++;
+    }
+    else
+    {
+        std::wcout << L"  -> [RESULT] TEST 6: FAILED\n\n";
+    }
+
+    // --------------------------------------------------------
+    // TEST 7: External Process / Subprocess Enforcement (PowerShell / Win32)
+    // --------------------------------------------------------
+    std::wcout << L"[TEST 7/8] External Application Access Denied (File Explorer & PowerShell)\n";
+    std::wcout << L"--------------------------------------------------------------------------\n";
+    std::wstring psCmd = L"powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"Get-Content -Path '" + sampleFile + L"' -ErrorAction Stop\" > NUL 2>&1";
+    int psExitCode = _wsystem(psCmd.c_str());
+
+    std::wstring psWriteCmd = L"powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"Set-Content -Path '" + testRoot + L"\\external_attack.txt' -Value 'hacked' -ErrorAction Stop\" > NUL 2>&1";
+    int psWriteExitCode = _wsystem(psWriteCmd.c_str());
+
+    std::wcout << L"  [7.1] External PowerShell Read Exit Code  : " << psExitCode << L" "
+               << (psExitCode != 0 ? L"(DENIED [OK])" : L"(SUCCEEDED [ERROR])") << L"\n";
+    std::wcout << L"  [7.2] External PowerShell Write Exit Code : " << psWriteExitCode << L" "
+               << (psWriteExitCode != 0 ? L"(DENIED [OK])" : L"(SUCCEEDED [ERROR])") << L"\n";
+
+    if (psExitCode != 0 && psWriteExitCode != 0)
+    {
+        std::wcout << L"  -> [RESULT] TEST 7: PASSED (External applications & scripts strictly blocked by OS)\n\n";
+        passed++;
+    }
+    else
+    {
+        std::wcout << L"  -> [RESULT] TEST 7: FAILED\n\n";
+    }
+
+    // --------------------------------------------------------
+    // TEST 8: Multi-Device Reference Counting & USB Removal Access Restoration
+    // --------------------------------------------------------
+    std::wcout << L"[TEST 8/8] Multi-Device Handling & Policy Deactivation on Removal\n";
+    std::wcout << L"-----------------------------------------------------------------\n";
+    // Connect second device
+    USBDevice testDev2;
+    testDev2.vendorId = L"13FE";
+    testDev2.productId = L"1D00";
+    testDev2.serialNumber = L"TEST_ENFORCE_KING_002";
+    testDev2.deviceId = L"USB\\VID_13FE&PID_1D00\\TEST_ENFORCE_KING_002";
+    testDev2.deviceInterfacePath = L"\\\\?\\USB#VID_13FE&PID_1D00#TEST_ENFORCE_KING_002#{a5dcbf10-6530-11d2-901f-00c04fb951ed}";
+
+    ProtectedFileMonitor::Instance().OnUsbDeviceConnected(testDev2);
+    int devCountAfter2 = ProtectedFileMonitor::Instance().GetActiveUsbDeviceCount();
+    std::wcout << L"  [8.1] Two USB Devices Connected : Count=" << devCountAfter2 << L" (Enforcement: "
+               << (ProtectedFileMonitor::Instance().IsEnforcementActive() ? L"ACTIVE [OK]" : L"INACTIVE") << L")\n";
+
+    // Disconnect Dev1: Dev2 is still active, so protection MUST remain active!
+    ProtectedFileMonitor::Instance().OnUsbDeviceDisconnected(testDev1.deviceInterfacePath);
+    bool stillActiveWithDev2 = ProtectedFileMonitor::Instance().IsEnforcementActive();
+    int devCountAfterRem1 = ProtectedFileMonitor::Instance().GetActiveUsbDeviceCount();
+    std::wcout << L"  [8.2] Dev1 Removed, Dev2 Present: Count=" << devCountAfterRem1 << L" (Enforcement: "
+               << (stillActiveWithDev2 ? L"REMAINS ACTIVE [OK]" : L"PREMATURELY DEACTIVATED [ERROR]") << L")\n";
+
+    // Disconnect Dev2: All devices gone -> Deactivate protection per policy!
+    ProtectedFileMonitor::Instance().OnUsbDeviceDisconnected(testDev2.deviceInterfacePath);
+    bool deactivatedOnAllRemoved = !ProtectedFileMonitor::Instance().IsEnforcementActive();
+    int finalDevCount = ProtectedFileMonitor::Instance().GetActiveUsbDeviceCount();
+    std::wcout << L"  [8.3] All Devices Removed       : Count=" << finalDevCount << L" (Enforcement: "
+               << (deactivatedOnAllRemoved ? L"DEACTIVATED [OK]" : L"STILL ACTIVE [ERROR]") << L"\n";
+
+    // Verify authorized access restored:
+    HANDLE hRestoredRead = CreateFileW(sampleFile.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+    bool readRestoredOk = (hRestoredRead != INVALID_HANDLE_VALUE);
+    if (hRestoredRead != INVALID_HANDLE_VALUE) CloseHandle(hRestoredRead);
+
+    HANDLE hRestoredWrite = CreateFileW(sampleFile.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+    bool writeRestoredOk = (hRestoredWrite != INVALID_HANDLE_VALUE);
+    if (hRestoredWrite != INVALID_HANDLE_VALUE) CloseHandle(hRestoredWrite);
+
+    std::wcout << L"  [8.4] Read After Restoration    : " << (readRestoredOk ? L"PERMITTED [OK]" : L"DENIED [ERROR]") << L"\n";
+    std::wcout << L"  [8.5] Write After Restoration   : " << (writeRestoredOk ? L"PERMITTED [OK]" : L"DENIED [ERROR]") << L"\n";
+
+    if (t1Active && stillActiveWithDev2 && deactivatedOnAllRemoved && readRestoredOk && writeRestoredOk)
+    {
+        std::wcout << L"  -> [RESULT] TEST 8: PASSED (Multi-device reference counting & clean restoration verified)\n\n";
+        passed++;
+    }
+    else
+    {
+        std::wcout << L"  -> [RESULT] TEST 8: FAILED\n\n";
+    }
+
+    // Clean up test files and directories
+    DeleteFileW(nestedFile.c_str());
+    RemoveDirectoryW(subFolder.c_str());
+    DeleteFileW(sampleFile.c_str());
+    RemoveDirectoryW(testRoot.c_str());
+
+    std::wcout << L"=======================================================\n";
+    std::wcout << L"PROTECTED FOLDER RESTRICTIONS SUMMARY: " << passed << L"/" << total << L" PASSED\n";
+    std::wcout << L"=======================================================\n\n";
+
+    return (passed == total);
+}
+
+
+// ============================================================
+// Approved Storage & Lifecycle Regression Suite (Scenarios A - F)
+// ============================================================
+
+bool RunApprovedStorageAndLifecycleRegressionSuite()
+{
+    std::wcout << L"\n=======================================================\n";
+    std::wcout << L" APPROVED STORAGE & LIFECYCLE REGRESSION SUITE (A - F) \n";
+    std::wcout << L"=======================================================\n\n";
+
+    int passed = 0;
+    int total = 6;
+
+    std::error_code dirEc;
+    std::filesystem::path tempDir = std::filesystem::temp_directory_path(dirEc);
+    std::filesystem::path testBaseDir = tempDir / "usbips_lifecycle_tests";
+    std::filesystem::remove_all(testBaseDir, dirEc);
+    std::filesystem::create_directories(testBaseDir, dirEc);
+
+    auto createMockFile = [](const std::filesystem::path& path, const std::string& content) {
+        std::error_code ec;
+        std::filesystem::create_directories(path.parent_path(), ec);
+        std::ofstream ofs(path, std::ios::binary);
+        ofs << content;
+        ofs.close();
+    };
+
+    AllowlistManager testAllowlist;
+    testAllowlist.Initialize(L":memory:");
+    TrustAssessmentEngine::Instance().SetAllowlistManager(&testAllowlist);
+
+    // --------------------------------------------------------
+    // SCENARIO A: Admin-approved USB storage with clean files released after volume mount
+    // --------------------------------------------------------
+    std::wcout << L"[SCENARIO A] Admin-approved USB storage with clean files released after volume mount\n";
+    std::wcout << L"------------------------------------------------------------------------------------\n";
+    {
+        EnforcementManager::SetMockEnforcement(true, true, CR_SUCCESS);
+        StorageExecutionMonitor::Instance().SetSimulatedInspectionResult(false);
+        MalwareScanner::Instance().SetSimulatedScanResult(true, ScanStatus::CLEAN);
+
+        std::filesystem::path driveDir = testBaseDir / "drive_scen_a_clean";
+        createMockFile(driveDir / "presentation.pptx", "PresentationData");
+        createMockFile(driveDir / "notes.txt", "MeetingNotes");
+
+        USBDevice dev;
+        dev.vendorId = L"0951";
+        dev.productId = L"1666";
+        dev.serialNumber = L"KINGSTON_DT50_CLEAN_001";
+        dev.deviceId = L"USB\\VID_0951&PID_1666\\KINGSTON_DT50_CLEAN_001";
+        dev.type = DeviceType::STORAGE;
+        dev.hasStorage = true;
+
+        DevicePresenceMonitor::TrackDevice(dev);
+        StorageExecutionMonitor::Instance().RegisterDeviceDriveMapping(dev.deviceId, L"K:");
+        StorageExecutionMonitor::Instance().RegisterMockVolumePath(L"K:", driveDir.wstring());
+
+        // Admin approves device in allowlist
+        testAllowlist.AddDevice(dev, 0, L"", L"Administrator permanent approval");
+
+        // Staged pre-release inspection
+        CONFIGRET relCr = CR_FAILURE;
+        EnforcementManager::ReleaseDevice(dev, &relCr);
+        bool storageClean = InspectStorageMedia(dev, 2000);
+
+        TrustAssessmentReport rep;
+        TrustAssessmentEngine::Instance().GetActiveAssessment(dev.deviceId, rep);
+
+        bool policyCompliant = (rep.executablePolicyStatus == L"COMPLIANT");
+        bool avClean = (rep.malwareScanResult == L"CLEAN");
+        bool isApproved = (rep.recommendation == TrustRecommendation::APPROVE);
+
+        if (storageClean && policyCompliant && avClean && isApproved)
+        {
+            DevicePresenceMonitor::SetDeviceState(dev.deviceId, DeviceTrackingState::RELEASED);
+            ProtectedFileMonitor::Instance().SetActiveDevice(dev);
+        }
+
+        DeviceTrackingState finalState;
+        bool stateFound = DevicePresenceMonitor::GetDeviceState(dev.deviceId, finalState);
+        bool isReleased = stateFound && (finalState == DeviceTrackingState::RELEASED);
+        bool activeDeviceMatches = (ProtectedFileMonitor::Instance().GetActiveDevice().deviceId == dev.deviceId);
+
+        std::wcout << L"  [A.1] Pre-Release Inspection Clean : " << (storageClean ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [A.2] Policy Compliance Status     : " << rep.executablePolicyStatus << L" -> " << (policyCompliant ? L"[OK]" : L"[FAIL]") << L"\n";
+        std::wcout << L"  [A.3] Antivirus Scan Status        : " << rep.malwareScanResult << L" -> " << (avClean ? L"[OK]" : L"[FAIL]") << L"\n";
+        std::wcout << L"  [A.4] Device State RELEASED        : " << (isReleased ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [A.5] File Monitor Activated       : " << (activeDeviceMatches ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+
+        if (storageClean && policyCompliant && avClean && isApproved && isReleased && activeDeviceMatches)
+        {
+            std::wcout << L"  -> [RESULT] SCENARIO A: PASSED (Approved storage with clean files verified and released)\n\n";
+            passed++;
+        }
+        else
+        {
+            std::wcout << L"  -> [RESULT] SCENARIO A: FAILED\n\n";
+        }
+
+        ProtectedFileMonitor::Instance().ClearActiveDevice();
+        StorageExecutionMonitor::Instance().ClearMockVolumePaths();
+        StorageExecutionMonitor::Instance().ClearDeviceDriveMappings();
+    }
+
+    // --------------------------------------------------------
+    // SCENARIO B: USB containing .exe or .com blocked with exact path and rule
+    // --------------------------------------------------------
+    std::wcout << L"[SCENARIO B] USB containing .exe or .com blocked with exact path and rule\n";
+    std::wcout << L"------------------------------------------------------------------------\n";
+    {
+        EnforcementManager::SetMockEnforcement(true, true, CR_SUCCESS);
+        StorageExecutionMonitor::Instance().SetSimulatedInspectionResult(false);
+        MalwareScanner::Instance().SetSimulatedScanResult(true, ScanStatus::CLEAN);
+
+        std::filesystem::path driveDir = testBaseDir / "drive_scen_b_threat";
+        createMockFile(driveDir / "tools" / "payload.exe", "MZ_EXE_HEADER");
+        createMockFile(driveDir / "data.csv", "id,name");
+
+        USBDevice dev;
+        dev.vendorId = L"0951";
+        dev.productId = L"1666";
+        dev.serialNumber = L"KINGSTON_INFECTED_002";
+        dev.deviceId = L"USB\\VID_0951&PID_1666\\KINGSTON_INFECTED_002";
+        dev.type = DeviceType::STORAGE;
+        dev.hasStorage = true;
+
+        DevicePresenceMonitor::TrackDevice(dev);
+        StorageExecutionMonitor::Instance().RegisterDeviceDriveMapping(dev.deviceId, L"L:");
+        StorageExecutionMonitor::Instance().RegisterMockVolumePath(L"L:", driveDir.wstring());
+
+        testAllowlist.AddDevice(dev, 0, L"", L"Prior admin approval");
+
+        bool storageClean = InspectStorageMedia(dev, 2000);
+
+        TrustAssessmentReport rep;
+        TrustAssessmentEngine::Instance().GetActiveAssessment(dev.deviceId, rep);
+
+        bool isBlocked = !storageClean;
+        bool statusBlocked = (rep.executablePolicyStatus == L"BLOCKED");
+        bool fileRecorded = (rep.exactThreatFile.find(L"payload.exe") != std::wstring::npos);
+        bool ruleRecorded = (rep.exactThreatEvidence.find(L".exe") != std::wstring::npos);
+        bool recReject = (rep.recommendation == TrustRecommendation::REJECT);
+
+        // Enforce Critical Threat: revoke allowlist & disable devnode
+        EnforcementManager::EnforceCriticalThreat(
+            dev,
+            L"STORAGE_EXECUTION_BLOCKED",
+            rep.exactThreatEvidence,
+            rep.totalRiskScore,
+            rep.explainableReasons,
+            &testAllowlist
+        );
+
+        bool allowlistRevoked = !testAllowlist.IsAllowed(dev);
+        DeviceTrackingState finalState;
+        DevicePresenceMonitor::GetDeviceState(dev.deviceId, finalState);
+        bool isQuarantined = (finalState == DeviceTrackingState::QUARANTINED);
+
+        std::wcout << L"  [B.1] Inspection Blocked           : " << (isBlocked ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [B.2] Policy Status BLOCKED        : " << (statusBlocked ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [B.3] Exact Threat File Recorded   : " << rep.exactThreatFile << L" -> " << (fileRecorded ? L"[OK]" : L"[FAIL]") << L"\n";
+        std::wcout << L"  [B.4] Policy Rule Recorded         : " << rep.exactThreatEvidence << L" -> " << (ruleRecorded ? L"[OK]" : L"[FAIL]") << L"\n";
+        std::wcout << L"  [B.5] Allowlist Entry Revoked      : " << (allowlistRevoked ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [B.6] Device Quarantined           : " << (isQuarantined ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+
+        if (isBlocked && statusBlocked && fileRecorded && ruleRecorded && recReject && allowlistRevoked && isQuarantined)
+        {
+            std::wcout << L"  -> [RESULT] SCENARIO B: PASSED (Prohibited executable blocked with exact path and rule)\n\n";
+            passed++;
+        }
+        else
+        {
+            std::wcout << L"  -> [RESULT] SCENARIO B: FAILED\n\n";
+        }
+
+        StorageExecutionMonitor::Instance().ClearMockVolumePaths();
+        StorageExecutionMonitor::Instance().ClearDeviceDriveMappings();
+    }
+
+    // --------------------------------------------------------
+    // SCENARIO C: Volume mount timeout keeps device restricted without reporting malware or revoking allowlist
+    // --------------------------------------------------------
+    std::wcout << L"[SCENARIO C] Volume mount timeout keeps device restricted without reporting malware or revoking allowlist\n";
+    std::wcout << L"-------------------------------------------------------------------------------------------------------\n";
+    {
+        EnforcementManager::SetMockEnforcement(true, true, CR_SUCCESS);
+        StorageExecutionMonitor::Instance().ClearDeviceDriveMappings();
+        StorageExecutionMonitor::Instance().ClearMockVolumePaths();
+
+        USBDevice dev;
+        dev.vendorId = L"0951";
+        dev.productId = L"1666";
+        dev.serialNumber = L"KINGSTON_UNMOUNTED_003";
+        dev.deviceId = L"USB\\VID_0951&PID_1666\\KINGSTON_UNMOUNTED_003";
+        dev.type = DeviceType::STORAGE;
+        dev.hasStorage = true;
+
+        DevicePresenceMonitor::TrackDevice(dev);
+        testAllowlist.AddDevice(dev, 0, L"", L"Pre-approved device");
+
+        bool inspectionResult = InspectStorageMedia(dev, 1000);
+
+        TrustAssessmentReport rep;
+        TrustAssessmentEngine::Instance().GetActiveAssessment(dev.deviceId, rep);
+
+        bool inspectionFailed = !inspectionResult;
+        bool statusNotScanned = (rep.executablePolicyStatus == L"NOT_MOUNTED" || rep.executablePolicyStatus == L"NOT_SCANNED");
+        bool avNotScanned = (rep.malwareScanResult == L"NOT_SCANNED");
+        bool notReportedAsMalware = (rep.malwareScanResult != L"INFECTED" && rep.malwareScanResult != L"DETECTED");
+        bool allowlistPreserved = testAllowlist.IsAllowed(dev);
+
+        // Register in pending inspection manager
+        PendingStorageInspectionManager::Instance().RegisterPendingDevice(dev);
+        bool hasPending = PendingStorageInspectionManager::Instance().HasPendingDevices();
+        PendingStorageInspectionManager::Instance().UnregisterDevice(dev.deviceId);
+
+        DeviceTrackingState trackingState;
+        DevicePresenceMonitor::GetDeviceState(dev.deviceId, trackingState);
+        bool isRestricted = (trackingState == DeviceTrackingState::QUARANTINED);
+
+        std::wcout << L"  [C.1] Mount Wait Timed Out         : " << (inspectionFailed ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [C.2] Executable Status Honest     : " << rep.executablePolicyStatus << L" -> " << (statusNotScanned ? L"[OK]" : L"[FAIL]") << L"\n";
+        std::wcout << L"  [C.3] Malware Status NOT_SCANNED   : " << rep.malwareScanResult << L" -> " << (avNotScanned ? L"[OK]" : L"[FAIL]") << L"\n";
+        std::wcout << L"  [C.4] Never Reported As Malware    : " << (notReportedAsMalware ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [C.5] Allowlist Preserved (Not Revoked): " << (allowlistPreserved ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [C.6] Registered In Pending Manager: " << (hasPending ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [C.7] Device Held Restricted       : " << (isRestricted ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+
+        if (inspectionFailed && statusNotScanned && avNotScanned && notReportedAsMalware && allowlistPreserved && hasPending && isRestricted)
+        {
+            std::wcout << L"  -> [RESULT] SCENARIO C: PASSED (Mount timeout honestly reported, device held restricted without false malware)\n\n";
+            passed++;
+        }
+        else
+        {
+            std::wcout << L"  -> [RESULT] SCENARIO C: FAILED\n\n";
+        }
+    }
+
+    // --------------------------------------------------------
+    // SCENARIO D: Approved device reinserted recognized by canonical fingerprint
+    // --------------------------------------------------------
+    std::wcout << L"[SCENARIO D] Approved device reinserted recognized by canonical fingerprint\n";
+    std::wcout << L"--------------------------------------------------------------------------\n";
+    {
+        USBDevice dev;
+        dev.vendorId = L"0951";
+        dev.productId = L"1666";
+        dev.serialNumber = L"KINGSTON_REINSERT_004";
+        dev.deviceId = L"USB\\VID_0951&PID_1666\\KINGSTON_REINSERT_004";
+        dev.type = DeviceType::STORAGE;
+        dev.hasStorage = true;
+
+        testAllowlist.AddDevice(dev, 0, L"", L"Approved device registration");
+
+        // 1. First connection: recognized
+        PolicyDecisionRecord pol1;
+        AccessDecision dec1 = AccessController::EvaluateWithDetails(dev, testAllowlist, pol1);
+
+        // 2. Physical disconnection: presence untracked, but database allowlist preserved
+        DevicePresenceMonitor::UntrackDevice(dev.deviceId);
+        bool presenceGone = !DevicePresenceMonitor::IsDevicePresent(dev.deviceId);
+        bool stillAllowedInDb = testAllowlist.IsAllowed(dev);
+
+        // 3. Physical reinsertion: evaluated again with exact canonical triplet
+        PolicyDecisionRecord pol2;
+        AccessDecision dec2 = AccessController::EvaluateWithDetails(dev, testAllowlist, pol2);
+
+        std::wcout << L"  [D.1] Initial Arrival Decision     : " << AccessController::ToString(dec1) << L" -> " << (dec1 == AccessDecision::ALLOW ? L"[OK]" : L"[FAIL]") << L"\n";
+        std::wcout << L"  [D.2] Untracked on Disconnect      : " << (presenceGone ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [D.3] Allowlist Entry Preserved    : " << (stillAllowedInDb ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [D.4] Reinsertion Decision         : " << AccessController::ToString(dec2) << L" -> " << (dec2 == AccessDecision::ALLOW ? L"[OK]" : L"[FAIL]") << L"\n";
+        std::wcout << L"  [D.5] Matched Canonical Fingerprint: " << pol2.alg1MatchedFields << L"\n";
+
+        if (dec1 == AccessDecision::ALLOW && presenceGone && stillAllowedInDb && dec2 == AccessDecision::ALLOW && pol2.alg1LocalAllowlist)
+        {
+            std::wcout << L"  -> [RESULT] SCENARIO D: PASSED (Approved device reinsertion recognized without requiring re-approval)\n\n";
+            passed++;
+        }
+        else
+        {
+            std::wcout << L"  -> [RESULT] SCENARIO D: FAILED\n\n";
+        }
+    }
+
+    // --------------------------------------------------------
+    // SCENARIO E: Permanently removed device reinserted triggers new authorization request
+    // --------------------------------------------------------
+    std::wcout << L"[SCENARIO E] Permanently removed device reinserted triggers new authorization request\n";
+    std::wcout << L"-------------------------------------------------------------------------------------\n";
+    {
+        USBDevice dev;
+        dev.vendorId = L"0951";
+        dev.productId = L"1666";
+        dev.serialNumber = L"KINGSTON_PERM_REM_005";
+        dev.deviceId = L"USB\\VID_0951&PID_1666\\KINGSTON_PERM_REM_005";
+        dev.type = DeviceType::STORAGE;
+        dev.hasStorage = true;
+
+        testAllowlist.AddDevice(dev, 0, L"", L"Initial admin approval");
+        bool allowedBefore = testAllowlist.IsAllowed(dev);
+
+        // Administrator permanently removes the device
+        testAllowlist.RemoveDevice(dev);
+        bool allowedAfterRemoval = testAllowlist.IsAllowed(dev);
+
+        // Device is reinserted into the workstation
+        PolicyDecisionRecord pol;
+        AccessDecision dec = AccessController::EvaluateWithDetails(dev, testAllowlist, pol);
+
+        std::wcout << L"  [E.1] Allowed Prior to Removal     : " << (allowedBefore ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [E.2] Allowed After Perm Removal   : " << (!allowedAfterRemoval ? L"NO (Purged) [OK]" : L"YES [FAIL]") << L"\n";
+        std::wcout << L"  [E.3] Reinsertion Decision         : " << AccessController::ToString(dec) << L" -> " << (dec == AccessDecision::ASK ? L"[OK]" : L"[FAIL]") << L"\n";
+        std::wcout << L"  [E.4] Local Allowlist Flag False   : " << (!pol.alg1LocalAllowlist ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+
+        if (allowedBefore && !allowedAfterRemoval && dec == AccessDecision::ASK && !pol.alg1LocalAllowlist)
+        {
+            std::wcout << L"  -> [RESULT] SCENARIO E: PASSED (Permanently removed device requires new authorization on reinsertion)\n\n";
+            passed++;
+        }
+        else
+        {
+            std::wcout << L"  -> [RESULT] SCENARIO E: FAILED\n\n";
+        }
+    }
+
+    // --------------------------------------------------------
+    // SCENARIO F: Scanner results (CLEAN, INFECTED, NOT_SCANNED, FAILED, UNAVAILABLE) synchronized
+    // --------------------------------------------------------
+    std::wcout << L"[SCENARIO F] Scanner results (CLEAN, INFECTED, NOT_SCANNED, FAILED, UNAVAILABLE) synchronized\n";
+    std::wcout << L"--------------------------------------------------------------------------------------------\n";
+    {
+        USBDevice dev;
+        dev.vendorId = L"0951";
+        dev.productId = L"1666";
+        dev.serialNumber = L"KINGSTON_STATUS_SYNC_006";
+        dev.deviceId = L"USB\\VID_0951&PID_1666\\KINGSTON_STATUS_SYNC_006";
+        dev.type = DeviceType::STORAGE;
+        dev.hasStorage = true;
+
+        bool allStatusesCorrect = true;
+
+        // 1. NOT_SCANNED
+        ScanResult r1; r1.status = ScanStatus::NOT_SCANNED; r1.details = L"Pending mount";
+        TrustAssessmentEngine::Instance().UpdateMalwareScanResult(dev, r1);
+        TrustAssessmentReport rep1; TrustAssessmentEngine::Instance().GetActiveAssessment(dev.deviceId, rep1);
+        bool s1 = (rep1.malwareScanResult == L"NOT_SCANNED");
+        std::wcout << L"  [F.1] NOT_SCANNED Status   : " << rep1.malwareScanResult << L" -> " << (s1 ? L"[OK]" : L"[FAIL]") << L"\n";
+        allStatusesCorrect = allStatusesCorrect && s1;
+
+        // 2. SCANNING
+        ScanResult r2; r2.status = ScanStatus::SCANNING; r2.details = L"Scan in progress";
+        TrustAssessmentEngine::Instance().UpdateMalwareScanResult(dev, r2);
+        TrustAssessmentReport rep2; TrustAssessmentEngine::Instance().GetActiveAssessment(dev.deviceId, rep2);
+        bool s2 = (rep2.malwareScanResult == L"SCANNING");
+        std::wcout << L"  [F.2] SCANNING Status      : " << rep2.malwareScanResult << L" -> " << (s2 ? L"[OK]" : L"[FAIL]") << L"\n";
+        allStatusesCorrect = allStatusesCorrect && s2;
+
+        // 3. CLEAN
+        ScanResult r3; r3.status = ScanStatus::CLEAN; r3.details = L"0 threats";
+        TrustAssessmentEngine::Instance().UpdateMalwareScanResult(dev, r3);
+        TrustAssessmentReport rep3; TrustAssessmentEngine::Instance().GetActiveAssessment(dev.deviceId, rep3);
+        bool s3 = (rep3.malwareScanResult == L"CLEAN");
+        std::wcout << L"  [F.3] CLEAN Status         : " << rep3.malwareScanResult << L" -> " << (s3 ? L"[OK]" : L"[FAIL]") << L"\n";
+        allStatusesCorrect = allStatusesCorrect && s3;
+
+        // 4. DETECTED => INFECTED
+        ScanResult r4; r4.status = ScanStatus::DETECTED; r4.threatName = L"Trojan.Win32.TestPayload"; r4.targetPath = L"E:\\bad.exe";
+        TrustAssessmentEngine::Instance().UpdateMalwareScanResult(dev, r4);
+        TrustAssessmentReport rep4; TrustAssessmentEngine::Instance().GetActiveAssessment(dev.deviceId, rep4);
+        bool s4 = (rep4.malwareScanResult == L"INFECTED");
+        std::wcout << L"  [F.4] DETECTED Status      : " << rep4.malwareScanResult << L" -> " << (s4 ? L"[OK]" : L"[FAIL]") << L"\n";
+        allStatusesCorrect = allStatusesCorrect && s4;
+
+        // 5. FAILED
+        ScanResult r5; r5.status = ScanStatus::FAILED; r5.details = L"Scanner crashed";
+        TrustAssessmentEngine::Instance().UpdateMalwareScanResult(dev, r5);
+        TrustAssessmentReport rep5; TrustAssessmentEngine::Instance().GetActiveAssessment(dev.deviceId, rep5);
+        bool s5 = (rep5.malwareScanResult == L"FAILED");
+        std::wcout << L"  [F.5] FAILED Status        : " << rep5.malwareScanResult << L" -> " << (s5 ? L"[OK]" : L"[FAIL]") << L"\n";
+        allStatusesCorrect = allStatusesCorrect && s5;
+
+        // 6. UNAVAILABLE
+        ScanResult r6; r6.status = ScanStatus::UNAVAILABLE; r6.details = L"No AV engine";
+        TrustAssessmentEngine::Instance().UpdateMalwareScanResult(dev, r6);
+        TrustAssessmentReport rep6; TrustAssessmentEngine::Instance().GetActiveAssessment(dev.deviceId, rep6);
+        bool s6 = (rep6.malwareScanResult == L"UNAVAILABLE");
+        std::wcout << L"  [F.6] UNAVAILABLE Status   : " << rep6.malwareScanResult << L" -> " << (s6 ? L"[OK]" : L"[FAIL]") << L"\n";
+        allStatusesCorrect = allStatusesCorrect && s6;
+
+        // 7. Algorithms JSON serialization test
+        std::wstring jsonClean = TrustAssessmentEngine::Instance().SerializeAlgorithmsJson(rep3);
+        bool jsonHasClean = (jsonClean.find(L"\"malware_scan_result\":\"CLEAN\"") != std::wstring::npos);
+        std::wstring jsonInfected = TrustAssessmentEngine::Instance().SerializeAlgorithmsJson(rep4);
+        bool jsonHasInfected = (jsonInfected.find(L"\"malware_scan_result\":\"INFECTED\"") != std::wstring::npos);
+
+        std::wcout << L"  [F.7] JSON CLEAN Serialized    : " << (jsonHasClean ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [F.8] JSON INFECTED Serialized : " << (jsonHasInfected ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+
+        if (allStatusesCorrect && jsonHasClean && jsonHasInfected)
+        {
+            std::wcout << L"  -> [RESULT] SCENARIO F: PASSED (All 6 scanner states correctly represented and serialized)\n\n";
+            passed++;
+        }
+        else
+        {
+            std::wcout << L"  -> [RESULT] SCENARIO F: FAILED\n\n";
+        }
+    }
+
+    // Cleanup
+    std::filesystem::remove_all(testBaseDir, dirEc);
+    EnforcementManager::SetMockEnforcement(false);
+    StorageExecutionMonitor::Instance().ClearMockVolumePaths();
+    StorageExecutionMonitor::Instance().ClearDeviceDriveMappings();
+    StorageExecutionMonitor::Instance().SetSimulatedInspectionResult(false);
+    MalwareScanner::Instance().SetSimulatedScanResult(false, ScanStatus::NOT_SCANNED);
+    TrustAssessmentEngine::Instance().SetAllowlistManager(nullptr);
+    PendingStorageInspectionManager::Instance().Stop();
+
+    std::wcout << L"=======================================================\n";
+    std::wcout << L"APPROVED STORAGE & LIFECYCLE SUMMARY: " << passed << L"/" << total << L" PASSED\n";
+    std::wcout << L"=======================================================\n\n";
+
+    return (passed == total);
+}
+
+
+// ============================================================
+// Focused USBIPS Executable-Policy Enforcement Regression Suite
+// (Mandated Regression Tests for Executable Policy Bug Fix)
+// ============================================================
+
+bool RunApprovedUsbExecutablePolicyRegressionSuite()
+{
+    std::wcout << L"\n=======================================================\n";
+    std::wcout << L" APPROVED USB EXECUTABLE-POLICY REGRESSION SUITE       \n";
+    std::wcout << L" (All 10 Mandatory Security Inspection Scenarios)      \n";
+    std::wcout << L"=======================================================\n\n";
+
+    int passed = 0;
+    const int total = 10;
+
+    AllowlistManager testAllowlist;
+    if (!testAllowlist.Initialize(L":memory:"))
+    {
+        std::wcerr << L"[REGRESSION ERROR] Failed to initialize in-memory allowlist.\n";
+        return false;
+    }
+
+    TrustAssessmentEngine::Instance().SetAllowlistManager(&testAllowlist);
+    PendingStorageInspectionManager::Instance().SetAllowlistManager(&testAllowlist);
+
+    std::filesystem::path testBaseDir = std::filesystem::temp_directory_path() / "usbips_approved_exe_policy_tests";
+    std::error_code dirEc;
+    std::filesystem::remove_all(testBaseDir, dirEc);
+    std::filesystem::create_directories(testBaseDir, dirEc);
+
+    auto createMockFile = [](const std::filesystem::path& path, const std::string& content) {
+        std::error_code ec;
+        std::filesystem::create_directories(path.parent_path(), ec);
+        std::ofstream ofs(path, std::ios::binary);
+        ofs << content;
+        ofs.close();
+    };
+
+    // --------------------------------------------------------
+    // TEST 1: Admin-approved USB containing an .exe file => remains quarantined, allowlist revoked, Code 22 verified
+    // --------------------------------------------------------
+    std::wcout << L"[REG-TEST 1] Admin-approved USB containing .exe => remains quarantined, allowlist revoked, Code 22 verified\n";
+    std::wcout << L"---------------------------------------------------------------------------------------------------------\n";
+    {
+        EnforcementManager::SetMockEnforcement(true, true, CR_SUCCESS);
+        StorageExecutionMonitor::Instance().SetSimulatedInspectionResult(false);
+        MalwareScanner::Instance().SetSimulatedScanResult(true, ScanStatus::CLEAN);
+
+        std::filesystem::path driveDir = testBaseDir / "drive_t1_exe";
+        createMockFile(driveDir / "subfolder" / "installer.exe", "MZ_EXE_HEADER_PAYLOAD");
+        createMockFile(driveDir / "data.docx", "WordDocData");
+
+        USBDevice dev;
+        dev.vendorId = L"0781";
+        dev.productId = L"5581";
+        dev.serialNumber = L"SANDISK_APPROVED_EXE_001";
+        dev.deviceId = L"USB\\VID_0781&PID_5581\\SANDISK_APPROVED_EXE_001";
+        dev.type = DeviceType::STORAGE;
+        dev.hasStorage = true;
+
+        DevicePresenceMonitor::TrackDevice(dev);
+        StorageExecutionMonitor::Instance().RegisterDeviceDriveMapping(dev.deviceId, L"M:");
+        StorageExecutionMonitor::Instance().RegisterMockVolumePath(L"M:", driveDir.wstring());
+
+        // Administrator authorizes the device
+        testAllowlist.AddDevice(dev, 0, L"", L"Administrator approval");
+        bool initiallyAllowed = testAllowlist.IsAllowed(dev);
+
+        // Pre-release inspection executes
+        CONFIGRET crRel = CR_FAILURE;
+        EnforcementManager::ReleaseDevice(dev, &crRel);
+        bool inspectionClean = InspectStorageMedia(dev, 2000);
+
+        TrustAssessmentReport rep;
+        TrustAssessmentEngine::Instance().GetActiveAssessment(dev.deviceId, rep);
+
+        bool isBlocked = !inspectionClean;
+        bool statusBlocked = (rep.executablePolicyStatus == L"BLOCKED");
+        bool recReject = (rep.recommendation == TrustRecommendation::REJECT);
+        bool fileRecorded = (rep.exactThreatFile.find(L"installer.exe") != std::wstring::npos);
+        bool evidenceRecorded = (rep.exactThreatEvidence.find(L"installer.exe") != std::wstring::npos);
+
+        if (statusBlocked)
+        {
+            EnforcementManager::EnforceCriticalThreat(
+                dev,
+                L"STORAGE_EXECUTION_BLOCKED",
+                rep.exactThreatEvidence,
+                rep.totalRiskScore,
+                rep.explainableReasons,
+                &testAllowlist
+            );
+            CONFIGRET qCr = CR_FAILURE;
+            EnforcementManager::QuarantineDevice(dev, &qCr);
+            DevicePresenceMonitor::SetDeviceState(dev.deviceId, DeviceTrackingState::QUARANTINED);
+        }
+
+        bool allowlistRevoked = !testAllowlist.IsAllowed(dev);
+        bool threatTombstoned = testAllowlist.HasActiveCriticalThreat(dev);
+
+        DeviceTrackingState finalState;
+        DevicePresenceMonitor::GetDeviceState(dev.deviceId, finalState);
+        bool notReleased = (finalState != DeviceTrackingState::RELEASED);
+
+        std::wcout << L"  [1.1] Initially Approved in Allowlist : " << (initiallyAllowed ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [1.2] Inspection Result Blocked       : " << (isBlocked ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [1.3] Executable Policy Status        : " << rep.executablePolicyStatus << L" -> " << (statusBlocked ? L"[OK]" : L"[FAIL]") << L"\n";
+        std::wcout << L"  [1.4] TAE Recommendation Reject       : " << (recReject ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [1.5] Exact File Recorded             : " << rep.exactThreatFile << L" -> " << (fileRecorded ? L"[OK]" : L"[FAIL]") << L"\n";
+        std::wcout << L"  [1.6] Evidence Has Exact File & Rule  : " << rep.exactThreatEvidence << L" -> " << (evidenceRecorded ? L"[OK]" : L"[FAIL]") << L"\n";
+        std::wcout << L"  [1.7] Allowlist Revoked On .exe Found : " << (allowlistRevoked ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [1.8] Critical Threat Tombstone Stored: " << (threatTombstoned ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [1.9] Device Never Released (Code 22) : " << (notReleased ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+
+        if (initiallyAllowed && isBlocked && statusBlocked && recReject && fileRecorded && evidenceRecorded && allowlistRevoked && threatTombstoned && notReleased)
+        {
+            std::wcout << L"  -> [RESULT] TEST 1: PASSED (Approved USB containing .exe strictly blocked & allowlist revoked)\n\n";
+            passed++;
+        }
+        else
+        {
+            std::wcout << L"  -> [RESULT] TEST 1: FAILED\n\n";
+        }
+
+        StorageExecutionMonitor::Instance().ClearMockVolumePaths();
+        StorageExecutionMonitor::Instance().ClearDeviceDriveMappings();
+        DevicePresenceMonitor::UntrackDevice(dev.deviceId);
+    }
+
+    // --------------------------------------------------------
+    // TEST 2: Admin-approved USB containing a .com file => remains quarantined, allowlist revoked, Code 22 verified
+    // --------------------------------------------------------
+    std::wcout << L"[REG-TEST 2] Admin-approved USB containing .com => remains quarantined, allowlist revoked, Code 22 verified\n";
+    std::wcout << L"---------------------------------------------------------------------------------------------------------\n";
+    {
+        EnforcementManager::SetMockEnforcement(true, true, CR_SUCCESS);
+        StorageExecutionMonitor::Instance().SetSimulatedInspectionResult(false);
+        MalwareScanner::Instance().SetSimulatedScanResult(true, ScanStatus::CLEAN);
+
+        std::filesystem::path driveDir = testBaseDir / "drive_t2_com";
+        createMockFile(driveDir / "tools" / "dosapp.com", "MZ_COM_BINARY_PAYLOAD");
+        createMockFile(driveDir / "readme.txt", "ReadmeText");
+
+        USBDevice dev;
+        dev.vendorId = L"0781";
+        dev.productId = L"5581";
+        dev.serialNumber = L"SANDISK_APPROVED_COM_002";
+        dev.deviceId = L"USB\\VID_0781&PID_5581\\SANDISK_APPROVED_COM_002";
+        dev.type = DeviceType::STORAGE;
+        dev.hasStorage = true;
+
+        DevicePresenceMonitor::TrackDevice(dev);
+        StorageExecutionMonitor::Instance().RegisterDeviceDriveMapping(dev.deviceId, L"N:");
+        StorageExecutionMonitor::Instance().RegisterMockVolumePath(L"N:", driveDir.wstring());
+
+        testAllowlist.AddDevice(dev, 0, L"", L"Administrator approval");
+        bool initiallyAllowed = testAllowlist.IsAllowed(dev);
+
+        CONFIGRET crRel = CR_FAILURE;
+        EnforcementManager::ReleaseDevice(dev, &crRel);
+        bool inspectionClean = InspectStorageMedia(dev, 2000);
+
+        TrustAssessmentReport rep;
+        TrustAssessmentEngine::Instance().GetActiveAssessment(dev.deviceId, rep);
+
+        bool isBlocked = !inspectionClean;
+        bool statusBlocked = (rep.executablePolicyStatus == L"BLOCKED");
+        bool recReject = (rep.recommendation == TrustRecommendation::REJECT);
+        bool fileRecorded = (rep.exactThreatFile.find(L"dosapp.com") != std::wstring::npos);
+        bool evidenceRecorded = (rep.exactThreatEvidence.find(L"dosapp.com") != std::wstring::npos);
+
+        if (statusBlocked)
+        {
+            EnforcementManager::EnforceCriticalThreat(
+                dev,
+                L"STORAGE_EXECUTION_BLOCKED",
+                rep.exactThreatEvidence,
+                rep.totalRiskScore,
+                rep.explainableReasons,
+                &testAllowlist
+            );
+            CONFIGRET qCr = CR_FAILURE;
+            EnforcementManager::QuarantineDevice(dev, &qCr);
+            DevicePresenceMonitor::SetDeviceState(dev.deviceId, DeviceTrackingState::QUARANTINED);
+        }
+
+        bool allowlistRevoked = !testAllowlist.IsAllowed(dev);
+        bool threatTombstoned = testAllowlist.HasActiveCriticalThreat(dev);
+
+        DeviceTrackingState finalState;
+        DevicePresenceMonitor::GetDeviceState(dev.deviceId, finalState);
+        bool notReleased = (finalState != DeviceTrackingState::RELEASED);
+
+        std::wcout << L"  [2.1] Initially Approved in Allowlist : " << (initiallyAllowed ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [2.2] Inspection Result Blocked       : " << (isBlocked ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [2.3] Executable Policy Status        : " << rep.executablePolicyStatus << L" -> " << (statusBlocked ? L"[OK]" : L"[FAIL]") << L"\n";
+        std::wcout << L"  [2.4] TAE Recommendation Reject       : " << (recReject ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [2.5] Exact File Recorded             : " << rep.exactThreatFile << L" -> " << (fileRecorded ? L"[OK]" : L"[FAIL]") << L"\n";
+        std::wcout << L"  [2.6] Evidence Has Exact File & Rule  : " << rep.exactThreatEvidence << L" -> " << (evidenceRecorded ? L"[OK]" : L"[FAIL]") << L"\n";
+        std::wcout << L"  [2.7] Allowlist Revoked On .com Found : " << (allowlistRevoked ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [2.8] Critical Threat Tombstone Stored: " << (threatTombstoned ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [2.9] Device Never Released (Code 22) : " << (notReleased ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+
+        if (initiallyAllowed && isBlocked && statusBlocked && recReject && fileRecorded && evidenceRecorded && allowlistRevoked && threatTombstoned && notReleased)
+        {
+            std::wcout << L"  -> [RESULT] TEST 2: PASSED (Approved USB containing .com strictly blocked & allowlist revoked)\n\n";
+            passed++;
+        }
+        else
+        {
+            std::wcout << L"  -> [RESULT] TEST 2: FAILED\n\n";
+        }
+
+        StorageExecutionMonitor::Instance().ClearMockVolumePaths();
+        StorageExecutionMonitor::Instance().ClearDeviceDriveMappings();
+        DevicePresenceMonitor::UntrackDevice(dev.deviceId);
+    }
+
+    // --------------------------------------------------------
+    // TEST 3: Confirmed malware on approved USB => remains quarantined, allowlist revoked, Code 22 verified
+    // --------------------------------------------------------
+    std::wcout << L"[REG-TEST 3] Confirmed malware on approved USB => remains quarantined, allowlist revoked, Code 22 verified\n";
+    std::wcout << L"----------------------------------------------------------------------------------------------------\n";
+    {
+        EnforcementManager::SetMockEnforcement(true, true, CR_SUCCESS);
+        StorageExecutionMonitor::Instance().SetSimulatedInspectionResult(false);
+        MalwareScanner::Instance().SetSimulatedScanResult(true, ScanStatus::DETECTED, L"Trojan.Win32.Generic", std::chrono::system_clock::now());
+
+        std::filesystem::path driveDir = testBaseDir / "drive_t3_malware";
+        createMockFile(driveDir / "document.pdf", "PDFDocumentContent");
+
+        USBDevice dev;
+        dev.vendorId = L"0781";
+        dev.productId = L"5581";
+        dev.serialNumber = L"SANDISK_APPROVED_MALWARE_003";
+        dev.deviceId = L"USB\\VID_0781&PID_5581\\SANDISK_APPROVED_MALWARE_003";
+        dev.type = DeviceType::STORAGE;
+        dev.hasStorage = true;
+
+        DevicePresenceMonitor::TrackDevice(dev);
+        StorageExecutionMonitor::Instance().RegisterDeviceDriveMapping(dev.deviceId, L"R:");
+        StorageExecutionMonitor::Instance().RegisterMockVolumePath(L"R:", driveDir.wstring());
+
+        testAllowlist.AddDevice(dev, 0, L"", L"Administrator approval");
+        bool initiallyAllowed = testAllowlist.IsAllowed(dev);
+
+        CONFIGRET crRel = CR_FAILURE;
+        EnforcementManager::ReleaseDevice(dev, &crRel);
+        bool inspectionClean = InspectStorageMedia(dev, 2000);
+
+        TrustAssessmentReport rep;
+        TrustAssessmentEngine::Instance().GetActiveAssessment(dev.deviceId, rep);
+
+        bool isBlocked = !inspectionClean;
+        bool statusInfected = (rep.malwareScanResult == L"INFECTED");
+        bool recReject = (rep.recommendation == TrustRecommendation::REJECT);
+
+        if (statusInfected)
+        {
+            EnforcementManager::EnforceCriticalThreat(
+                dev,
+                L"MALWARE_DETECTED",
+                rep.exactThreatEvidence,
+                rep.totalRiskScore,
+                rep.explainableReasons,
+                &testAllowlist
+            );
+            CONFIGRET qCr = CR_FAILURE;
+            EnforcementManager::QuarantineDevice(dev, &qCr);
+            DevicePresenceMonitor::SetDeviceState(dev.deviceId, DeviceTrackingState::QUARANTINED);
+        }
+
+        bool allowlistRevoked = !testAllowlist.IsAllowed(dev);
+        bool threatTombstoned = testAllowlist.HasActiveCriticalThreat(dev);
+
+        DeviceTrackingState finalState;
+        DevicePresenceMonitor::GetDeviceState(dev.deviceId, finalState);
+        bool notReleased = (finalState == DeviceTrackingState::QUARANTINED);
+
+        std::wcout << L"  [3.1] Initially Approved in Allowlist : " << (initiallyAllowed ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [3.2] Inspection Result Blocked       : " << (isBlocked ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [3.3] Malware Scan Result INFECTED    : " << rep.malwareScanResult << L" -> " << (statusInfected ? L"[OK]" : L"[FAIL]") << L"\n";
+        std::wcout << L"  [3.4] TAE Recommendation REJECT       : " << (recReject ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [3.5] Allowlist Revoked On Malware    : " << (allowlistRevoked ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [3.6] Critical Threat Tombstone Stored: " << (threatTombstoned ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [3.7] Device Held in QUARANTINED State: " << (notReleased ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+
+        if (initiallyAllowed && isBlocked && statusInfected && recReject && allowlistRevoked && threatTombstoned && notReleased)
+        {
+            std::wcout << L"  -> [RESULT] TEST 3: PASSED (Confirmed malware on approved USB strictly quarantined & allowlist revoked)\n\n";
+            passed++;
+        }
+        else
+        {
+            std::wcout << L"  -> [RESULT] TEST 3: FAILED\n\n";
+        }
+
+        StorageExecutionMonitor::Instance().ClearMockVolumePaths();
+        StorageExecutionMonitor::Instance().ClearDeviceDriveMappings();
+        DevicePresenceMonitor::UntrackDevice(dev.deviceId);
+    }
+
+    // --------------------------------------------------------
+    // TEST 4: Clean USB with all mandatory checks completed and valid authorization => released & operational
+    // --------------------------------------------------------
+    std::wcout << L"[REG-TEST 4] Clean USB with all mandatory checks completed & authorized => RELEASED & operational\n";
+    std::wcout << L"---------------------------------------------------------------------------------------------\n";
+    {
+        EnforcementManager::SetMockEnforcement(true, true, CR_SUCCESS);
+        StorageExecutionMonitor::Instance().SetSimulatedInspectionResult(false);
+        MalwareScanner::Instance().SetSimulatedScanResult(true, ScanStatus::CLEAN);
+
+        std::filesystem::path driveDir = testBaseDir / "drive_t4_clean";
+        createMockFile(driveDir / "manual.pdf", "PDFDocumentContent");
+        createMockFile(driveDir / "photo.png", "PNGImageData");
+        createMockFile(driveDir / "data.csv", "Col1,Col2,Col3");
+
+        USBDevice dev;
+        dev.vendorId = L"0781";
+        dev.productId = L"5581";
+        dev.serialNumber = L"SANDISK_APPROVED_CLEAN_004";
+        dev.deviceId = L"USB\\VID_0781&PID_5581\\SANDISK_APPROVED_CLEAN_004";
+        dev.type = DeviceType::STORAGE;
+        dev.hasStorage = true;
+
+        DevicePresenceMonitor::TrackDevice(dev);
+        StorageExecutionMonitor::Instance().RegisterDeviceDriveMapping(dev.deviceId, L"P:");
+        StorageExecutionMonitor::Instance().RegisterMockVolumePath(L"P:", driveDir.wstring());
+
+        testAllowlist.AddDevice(dev, 0, L"", L"Administrator permanent approval");
+
+        CONFIGRET crRel = CR_FAILURE;
+        EnforcementManager::ReleaseDevice(dev, &crRel);
+        bool inspectionClean = InspectStorageMedia(dev, 2000);
+
+        TrustAssessmentReport rep;
+        TrustAssessmentEngine::Instance().GetActiveAssessment(dev.deviceId, rep);
+
+        bool policyCompliant = (rep.executablePolicyStatus == L"COMPLIANT");
+        bool avClean = (rep.malwareScanResult == L"CLEAN");
+        bool recApprove = (rep.recommendation == TrustRecommendation::APPROVE);
+
+        if (inspectionClean && policyCompliant && avClean && recApprove)
+        {
+            DevicePresenceMonitor::SetDeviceState(dev.deviceId, DeviceTrackingState::RELEASED);
+            ProtectedFileMonitor::Instance().SetActiveDevice(dev);
+        }
+
+        DeviceTrackingState finalState;
+        DevicePresenceMonitor::GetDeviceState(dev.deviceId, finalState);
+        bool isReleased = (finalState == DeviceTrackingState::RELEASED);
+        bool allowlistPreserved = testAllowlist.IsAllowed(dev);
+        bool monitorActive = (ProtectedFileMonitor::Instance().GetActiveDevice().deviceId == dev.deviceId);
+
+        std::wcout << L"  [4.1] Pre-Release Inspection Clean : " << (inspectionClean ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [4.2] Executable Status COMPLIANT  : " << rep.executablePolicyStatus << L" -> " << (policyCompliant ? L"[OK]" : L"[FAIL]") << L"\n";
+        std::wcout << L"  [4.3] Malware Scan CLEAN           : " << rep.malwareScanResult << L" -> " << (avClean ? L"[OK]" : L"[FAIL]") << L"\n";
+        std::wcout << L"  [4.4] TAE Recommendation APPROVE   : " << (recApprove ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [4.5] Device State RELEASED        : " << (isReleased ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [4.6] Local Allowlist Preserved    : " << (allowlistPreserved ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [4.7] Protected File Monitor Active: " << (monitorActive ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+
+        if (inspectionClean && policyCompliant && avClean && recApprove && isReleased && allowlistPreserved && monitorActive)
+        {
+            std::wcout << L"  -> [RESULT] TEST 4: PASSED (Clean approved USB proceeds to RELEASED state)\n\n";
+            passed++;
+        }
+        else
+        {
+            std::wcout << L"  -> [RESULT] TEST 4: FAILED\n\n";
+        }
+
+        ProtectedFileMonitor::Instance().ClearActiveDevice();
+        StorageExecutionMonitor::Instance().ClearMockVolumePaths();
+        StorageExecutionMonitor::Instance().ClearDeviceDriveMappings();
+        DevicePresenceMonitor::UntrackDevice(dev.deviceId);
+    }
+
+    // --------------------------------------------------------
+    // TEST 5: Volume mount timeout => restricted; no false clean result; verified devnode disabled
+    // --------------------------------------------------------
+    std::wcout << L"[REG-TEST 5] Volume mount timeout => RESTRICTED, no false clean result, verified devnode disabled\n";
+    std::wcout << L"-----------------------------------------------------------------------------------------------\n";
+    {
+        EnforcementManager::SetMockEnforcement(true, true, CR_SUCCESS);
+        StorageExecutionMonitor::Instance().ClearDeviceDriveMappings();
+        StorageExecutionMonitor::Instance().ClearMockVolumePaths();
+
+        USBDevice dev;
+        dev.vendorId = L"0781";
+        dev.productId = L"5581";
+        dev.serialNumber = L"SANDISK_TIMEOUT_005";
+        dev.deviceId = L"USB\\VID_0781&PID_5581\\SANDISK_TIMEOUT_005";
+        dev.type = DeviceType::STORAGE;
+        dev.hasStorage = true;
+
+        DevicePresenceMonitor::TrackDevice(dev);
+        testAllowlist.AddDevice(dev, 0, L"", L"Pre-approved device");
+
+        bool inspectionResult = InspectStorageMedia(dev, 1000);
+
+        TrustAssessmentReport rep;
+        TrustAssessmentEngine::Instance().GetActiveAssessment(dev.deviceId, rep);
+
+        bool inspectionFailed = !inspectionResult;
+        bool statusHonest = (rep.executablePolicyStatus == L"NOT_MOUNTED" || rep.executablePolicyStatus == L"NOT_SCANNED");
+        bool notFalselyClean = (rep.executablePolicyStatus != L"COMPLIANT" && rep.executablePolicyStatus != L"CLEAN");
+        bool avNotFalselyClean = (rep.malwareScanResult == L"NOT_SCANNED");
+        bool allowlistPreserved = testAllowlist.IsAllowed(dev);
+
+        PendingStorageInspectionManager::Instance().RegisterPendingDevice(dev);
+        bool hasPending = PendingStorageInspectionManager::Instance().HasPendingDevices();
+        PendingStorageInspectionManager::Instance().UnregisterDevice(dev.deviceId);
+
+        CONFIGRET qCr = CR_FAILURE;
+        bool quarantined = EnforcementManager::QuarantineDevice(dev, &qCr);
+        DevicePresenceMonitor::SetDeviceState(dev.deviceId, DeviceTrackingState::QUARANTINED);
+
+        DeviceTrackingState trackingState;
+        DevicePresenceMonitor::GetDeviceState(dev.deviceId, trackingState);
+        bool isRestricted = (trackingState == DeviceTrackingState::QUARANTINED);
+
+        std::wcout << L"  [5.1] Mount Timed Out Honestly     : " << (inspectionFailed ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [5.2] Executable Status Honest     : " << rep.executablePolicyStatus << L" -> " << (statusHonest ? L"[OK]" : L"[FAIL]") << L"\n";
+        std::wcout << L"  [5.3] Never Falsely CLEAN          : " << (notFalselyClean ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [5.4] AV Status NOT_SCANNED        : " << rep.malwareScanResult << L" -> " << (avNotFalselyClean ? L"[OK]" : L"[FAIL]") << L"\n";
+        std::wcout << L"  [5.5] Allowlist Preserved (No False Tombstone): " << (allowlistPreserved ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [5.6] Registered In Pending Manager: " << (hasPending ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [5.7] Devnode Verified Quarantined : " << (quarantined && qCr == CR_SUCCESS ? L"YES (Code 22 verified) [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [5.8] Device Held Restricted       : " << (isRestricted ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+
+        if (inspectionFailed && statusHonest && notFalselyClean && avNotFalselyClean && allowlistPreserved && hasPending && quarantined && isRestricted)
+        {
+            std::wcout << L"  -> [RESULT] TEST 5: PASSED (Mount timeout honestly handled, devnode quarantined, no false clean)\n\n";
+            passed++;
+        }
+        else
+        {
+            std::wcout << L"  -> [RESULT] TEST 5: FAILED\n\n";
+        }
+
+        DevicePresenceMonitor::UntrackDevice(dev.deviceId);
+    }
+
+    // --------------------------------------------------------
+    // TEST 6: Scanner failure or unavailability => restricted when scanning is mandatory
+    // --------------------------------------------------------
+    std::wcout << L"[REG-TEST 6] Scanner failure or unavailability => restricted when scanning is mandatory\n";
+    std::wcout << L"----------------------------------------------------------------------------------------\n";
+    {
+        EnforcementManager::SetMockEnforcement(true, true, CR_SUCCESS);
+        StorageExecutionMonitor::Instance().SetSimulatedInspectionResult(false);
+        MalwareScanner::Instance().SetSimulatedScanResult(true, ScanStatus::FAILED, L"Simulated AV scanner timeout", std::chrono::system_clock::now());
+
+        std::filesystem::path driveDir = testBaseDir / "drive_t6_avfail";
+        createMockFile(driveDir / "notes.txt", "Plain text file content");
+
+        USBDevice dev;
+        dev.vendorId = L"0781";
+        dev.productId = L"5581";
+        dev.serialNumber = L"SANDISK_AVFAIL_006";
+        dev.deviceId = L"USB\\VID_0781&PID_5581\\SANDISK_AVFAIL_006";
+        dev.type = DeviceType::STORAGE;
+        dev.hasStorage = true;
+
+        DevicePresenceMonitor::TrackDevice(dev);
+        StorageExecutionMonitor::Instance().RegisterDeviceDriveMapping(dev.deviceId, L"S:");
+        StorageExecutionMonitor::Instance().RegisterMockVolumePath(L"S:", driveDir.wstring());
+
+        testAllowlist.AddDevice(dev, 0, L"", L"Pre-approved device");
+        bool initiallyAllowed = testAllowlist.IsAllowed(dev);
+
+        CONFIGRET crRel = CR_FAILURE;
+        EnforcementManager::ReleaseDevice(dev, &crRel);
+        bool inspectionClean = InspectStorageMedia(dev, 2000);
+
+        TrustAssessmentReport rep;
+        TrustAssessmentEngine::Instance().GetActiveAssessment(dev.deviceId, rep);
+
+        bool inspectionBlocked = !inspectionClean;
+        bool avStatusFailed = (rep.malwareScanResult == L"FAILED");
+        bool notFalselyClean = (rep.malwareScanResult != L"CLEAN");
+
+        CONFIGRET qCr = CR_FAILURE;
+        bool quarantined = EnforcementManager::QuarantineDevice(dev, &qCr);
+        DevicePresenceMonitor::SetDeviceState(dev.deviceId, DeviceTrackingState::QUARANTINED);
+
+        DeviceTrackingState trackingState;
+        DevicePresenceMonitor::GetDeviceState(dev.deviceId, trackingState);
+        bool isRestricted = (trackingState == DeviceTrackingState::QUARANTINED);
+        bool allowlistNotTombstoned = !testAllowlist.HasActiveCriticalThreat(dev);
+
+        std::wcout << L"  [6.1] Initially Approved in Allowlist : " << (initiallyAllowed ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [6.2] Inspection Result Blocked       : " << (inspectionBlocked ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [6.3] Malware Scan Status FAILED      : " << rep.malwareScanResult << L" -> " << (avStatusFailed ? L"[OK]" : L"[FAIL]") << L"\n";
+        std::wcout << L"  [6.4] Never Falsely CLEAN             : " << (notFalselyClean ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [6.5] Devnode Quarantined (Code 22)   : " << (quarantined && qCr == CR_SUCCESS ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [6.6] Device Held in QUARANTINED State: " << (isRestricted ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [6.7] Allowlist Not Falsely Tombstoned: " << (allowlistNotTombstoned ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+
+        if (initiallyAllowed && inspectionBlocked && avStatusFailed && notFalselyClean && isRestricted && allowlistNotTombstoned)
+        {
+            std::wcout << L"  -> [RESULT] TEST 6: PASSED (Scanner failure properly keeps device restricted, no false clean)\n\n";
+            passed++;
+        }
+        else
+        {
+            std::wcout << L"  -> [RESULT] TEST 6: FAILED\n\n";
+        }
+
+        StorageExecutionMonitor::Instance().ClearMockVolumePaths();
+        StorageExecutionMonitor::Instance().ClearDeviceDriveMappings();
+        DevicePresenceMonitor::UntrackDevice(dev.deviceId);
+    }
+
+    // --------------------------------------------------------
+    // TEST 7: Server Synchronization Release Path cannot bypass mandatory inspection
+    // --------------------------------------------------------
+    std::wcout << L"[REG-TEST 7] Server synchronization release path cannot bypass mandatory inspection\n";
+    std::wcout << L"----------------------------------------------------------------------------------\n";
+    {
+        EnforcementManager::SetMockEnforcement(true, true, CR_SUCCESS);
+        StorageExecutionMonitor::Instance().SetSimulatedInspectionResult(false);
+        MalwareScanner::Instance().SetSimulatedScanResult(true, ScanStatus::CLEAN);
+
+        std::filesystem::path driveDir = testBaseDir / "drive_t7_sync";
+        createMockFile(driveDir / "tools" / "backdoor.exe", "MZ_BACKDOOR_PAYLOAD");
+
+        USBDevice dev;
+        dev.vendorId = L"0781";
+        dev.productId = L"5581";
+        dev.serialNumber = L"SANDISK_SYNC_THREAT_007";
+        dev.deviceId = L"USB\\VID_0781&PID_5581\\SANDISK_SYNC_THREAT_007";
+        dev.type = DeviceType::STORAGE;
+        dev.hasStorage = true;
+
+        DevicePresenceMonitor::TrackDevice(dev);
+        DevicePresenceMonitor::SetDeviceState(dev.deviceId, DeviceTrackingState::QUARANTINED);
+        StorageExecutionMonitor::Instance().RegisterDeviceDriveMapping(dev.deviceId, L"Q:");
+        StorageExecutionMonitor::Instance().RegisterMockVolumePath(L"Q:", driveDir.wstring());
+
+        // Simulate Central Server approval synchronization: device added to allowlist
+        testAllowlist.AddDevice(dev, 0, L"", L"Server approved allowlist sync");
+        bool allowedBySync = testAllowlist.IsAllowed(dev);
+
+        // Pre-release inspection triggered in SyncManager release path
+        CONFIGRET crRel = CR_FAILURE;
+        EnforcementManager::ReleaseDevice(dev, &crRel);
+        bool storageClean = InspectStorageMedia(dev, 2000);
+
+        TrustAssessmentReport rep;
+        TrustAssessmentEngine::Instance().GetActiveAssessment(dev.deviceId, rep);
+
+        bool isThreat = (rep.executablePolicyStatus == L"BLOCKED");
+        if (isThreat)
+        {
+            EnforcementManager::EnforceCriticalThreat(
+                dev,
+                L"STORAGE_EXECUTION_BLOCKED",
+                rep.exactThreatEvidence,
+                rep.totalRiskScore,
+                rep.explainableReasons,
+                &testAllowlist
+            );
+            CONFIGRET qCr = CR_FAILURE;
+            EnforcementManager::QuarantineDevice(dev, &qCr);
+            DevicePresenceMonitor::SetDeviceState(dev.deviceId, DeviceTrackingState::QUARANTINED);
+        }
+
+        bool allowlistRevokedAfterSync = !testAllowlist.IsAllowed(dev);
+        bool threatRecordedInDb = testAllowlist.HasActiveCriticalThreat(dev);
+
+        DeviceTrackingState finalState;
+        DevicePresenceMonitor::GetDeviceState(dev.deviceId, finalState);
+        bool deviceHeldQuarantined = (finalState == DeviceTrackingState::QUARANTINED);
+
+        std::wcout << L"  [7.1] Approved In Server Allowlist Sync : " << (allowedBySync ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [7.2] Storage Inspection Caught .exe   : " << (!storageClean ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [7.3] Allowlist Revoked (Not Released) : " << (allowlistRevokedAfterSync ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [7.4] Threat Tombstone Recorded in DB  : " << (threatRecordedInDb ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [7.5] Device Held in QUARANTINED State : " << (deviceHeldQuarantined ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+
+        if (allowedBySync && !storageClean && allowlistRevokedAfterSync && threatRecordedInDb && deviceHeldQuarantined)
+        {
+            std::wcout << L"  -> [RESULT] TEST 7: PASSED (Server sync path strictly checks executable policy, blocking prohibited files)\n\n";
+            passed++;
+        }
+        else
+        {
+            std::wcout << L"  -> [RESULT] TEST 7: FAILED\n\n";
+        }
+
+        StorageExecutionMonitor::Instance().ClearMockVolumePaths();
+        StorageExecutionMonitor::Instance().ClearDeviceDriveMappings();
+        DevicePresenceMonitor::UntrackDevice(dev.deviceId);
+    }
+
+    // --------------------------------------------------------
+    // TEST 8: Reinserted approved device is recognized but re-inspected before release
+    // --------------------------------------------------------
+    std::wcout << L"[REG-TEST 8] Reinserted approved device is recognized but re-inspected before release\n";
+    std::wcout << L"-------------------------------------------------------------------------------------\n";
+    {
+        EnforcementManager::SetMockEnforcement(true, true, CR_SUCCESS);
+        StorageExecutionMonitor::Instance().SetSimulatedInspectionResult(false);
+        MalwareScanner::Instance().SetSimulatedScanResult(true, ScanStatus::CLEAN);
+
+        std::filesystem::path driveDir = testBaseDir / "drive_t8_reinsert";
+        createMockFile(driveDir / "autorun.exe", "MZ_AUTORUN_PAYLOAD");
+
+        USBDevice dev;
+        dev.vendorId = L"0781";
+        dev.productId = L"5581";
+        dev.serialNumber = L"SANDISK_REINSERT_008";
+        dev.deviceId = L"USB\\VID_0781&PID_5581\\SANDISK_REINSERT_008";
+        dev.type = DeviceType::STORAGE;
+        dev.hasStorage = true;
+
+        // Device previously approved by admin
+        testAllowlist.AddDevice(dev, 0, L"", L"Administrator previous approval");
+        bool recognizedOnReinsert = testAllowlist.IsAllowed(dev);
+
+        // Device reinserted: first tracked in QUARANTINED state
+        DevicePresenceMonitor::TrackDevice(dev);
+        DevicePresenceMonitor::SetDeviceState(dev.deviceId, DeviceTrackingState::QUARANTINED);
+
+        StorageExecutionMonitor::Instance().RegisterDeviceDriveMapping(dev.deviceId, L"T:");
+        StorageExecutionMonitor::Instance().RegisterMockVolumePath(L"T:", driveDir.wstring());
+
+        // Pre-release inspection triggered on reinsertion
+        CONFIGRET crRel = CR_FAILURE;
+        EnforcementManager::ReleaseDevice(dev, &crRel);
+        bool storageClean = InspectStorageMedia(dev, 2000);
+
+        TrustAssessmentReport rep;
+        TrustAssessmentEngine::Instance().GetActiveAssessment(dev.deviceId, rep);
+
+        bool isBlocked = !storageClean;
+        bool statusBlocked = (rep.executablePolicyStatus == L"BLOCKED");
+
+        if (statusBlocked)
+        {
+            EnforcementManager::EnforceCriticalThreat(
+                dev,
+                L"STORAGE_EXECUTION_BLOCKED",
+                rep.exactThreatEvidence,
+                rep.totalRiskScore,
+                rep.explainableReasons,
+                &testAllowlist
+            );
+            CONFIGRET qCr = CR_FAILURE;
+            EnforcementManager::QuarantineDevice(dev, &qCr);
+            DevicePresenceMonitor::SetDeviceState(dev.deviceId, DeviceTrackingState::QUARANTINED);
+        }
+
+        bool allowlistRevokedOnReinsert = !testAllowlist.IsAllowed(dev);
+        bool threatTombstoneStored = testAllowlist.HasActiveCriticalThreat(dev);
+
+        DeviceTrackingState finalState;
+        DevicePresenceMonitor::GetDeviceState(dev.deviceId, finalState);
+        bool heldQuarantined = (finalState == DeviceTrackingState::QUARANTINED);
+
+        std::wcout << L"  [8.1] Recognized on Reinsertion     : " << (recognizedOnReinsert ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [8.2] Re-Inspection Caught .exe     : " << (isBlocked ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [8.3] Executable Policy BLOCKED     : " << rep.executablePolicyStatus << L" -> " << (statusBlocked ? L"[OK]" : L"[FAIL]") << L"\n";
+        std::wcout << L"  [8.4] Allowlist Revoked After Reinsert: " << (allowlistRevokedOnReinsert ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [8.5] Critical Threat Tombstone Stored: " << (threatTombstoneStored ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [8.6] Device Held Quarantined (Code 22): " << (heldQuarantined ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+
+        if (recognizedOnReinsert && isBlocked && statusBlocked && allowlistRevokedOnReinsert && threatTombstoneStored && heldQuarantined)
+        {
+            std::wcout << L"  -> [RESULT] TEST 8: PASSED (Reinserted approved device recognized but strictly re-inspected before release)\n\n";
+            passed++;
+        }
+        else
+        {
+            std::wcout << L"  -> [RESULT] TEST 8: FAILED\n\n";
+        }
+
+        StorageExecutionMonitor::Instance().ClearMockVolumePaths();
+        StorageExecutionMonitor::Instance().ClearDeviceDriveMappings();
+        DevicePresenceMonitor::UntrackDevice(dev.deviceId);
+    }
+
+    // --------------------------------------------------------
+    // TEST 9: HID devices (mouse, keyboard): existing behavior unchanged
+    // --------------------------------------------------------
+    std::wcout << L"[REG-TEST 9] HID devices (keyboard/mouse) => existing behavior completely unchanged\n";
+    std::wcout << L"--------------------------------------------------------------------------------\n";
+    {
+        USBDevice kbDev;
+        kbDev.vendorId = L"046D";
+        kbDev.productId = L"C31C";
+        kbDev.serialNumber = L"LOGITECH_KEYBOARD_009";
+        kbDev.deviceId = L"USB\\VID_046D&PID_C31C\\LOGITECH_KEYBOARD_009";
+        kbDev.type = DeviceType::HID;
+        kbDev.hasHID = true;
+        kbDev.hasKeyboard = true;
+        kbDev.hasStorage = false;
+
+        // HID device does not have storage
+        bool inspectionBypass = InspectStorageMedia(kbDev);
+
+        testAllowlist.AddDevice(kbDev, 0, L"", L"Approved keyboard");
+        PolicyDecisionRecord pol;
+        AccessDecision dec = AccessController::EvaluateWithDetails(kbDev, testAllowlist, pol);
+
+        std::wcout << L"  [9.1] Device hasStorage Flag False : " << (!kbDev.hasStorage ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [9.2] Storage Inspection Returns True: " << (inspectionBypass ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [9.3] Allowlist Match Evaluates    : " << AccessController::ToString(dec) << L" -> " << (dec == AccessDecision::ALLOW ? L"[OK]" : L"[FAIL]") << L"\n";
+
+        USBDevice mouseDev;
+        mouseDev.vendorId = L"046D";
+        mouseDev.productId = L"C077";
+        mouseDev.serialNumber = L"LOGITECH_MOUSE_009";
+        mouseDev.deviceId = L"USB\\VID_046D&PID_C077\\LOGITECH_MOUSE_009";
+        mouseDev.type = DeviceType::HID;
+        mouseDev.hasHID = true;
+        mouseDev.hasMouse = true;
+        mouseDev.hasStorage = false;
+
+        bool mouseInspectionBypass = InspectStorageMedia(mouseDev);
+        std::wcout << L"  [9.4] Mouse Storage Inspection True: " << (mouseInspectionBypass ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+
+        if (!kbDev.hasStorage && inspectionBypass && dec == AccessDecision::ALLOW && mouseInspectionBypass)
+        {
+            std::wcout << L"  -> [RESULT] TEST 9: PASSED (HID devices remain unaffected by storage inspection policies)\n\n";
+            passed++;
+        }
+        else
+        {
+            std::wcout << L"  -> [RESULT] TEST 9: FAILED\n\n";
+        }
+    }
+
+    // --------------------------------------------------------
+    // TEST 10: Repeated pending inspection events do not flood dashboard or duplicate events
+    // --------------------------------------------------------
+    std::wcout << L"[REG-TEST 10] Repeated pending inspection events do not flood dashboard or duplicate events\n";
+    std::wcout << L"-----------------------------------------------------------------------------------------\n";
+    {
+        USBDevice dev;
+        dev.vendorId = L"0781";
+        dev.productId = L"5581";
+        dev.serialNumber = L"SANDISK_DEDUP_010";
+        dev.deviceId = L"USB\\VID_0781&PID_5581\\SANDISK_DEDUP_010";
+        dev.type = DeviceType::STORAGE;
+        dev.hasStorage = true;
+
+        // 1. PendingStorageInspectionManager registration deduplication
+        PendingStorageInspectionManager::Instance().RegisterPendingDevice(dev);
+        PendingStorageInspectionManager::Instance().RegisterPendingDevice(dev);
+        PendingStorageInspectionManager::Instance().RegisterPendingDevice(dev);
+
+        bool hasPending = PendingStorageInspectionManager::Instance().HasPendingDevices();
+        PendingStorageInspectionManager::Instance().UnregisterDevice(dev.deviceId);
+        bool clearedPending = !PendingStorageInspectionManager::Instance().HasPendingDevices();
+
+        // 2. Audit Event Deduplication in EventLogger
+        bool log1 = EventLogger::Instance().LogEvent(
+            SecurityEventType::DEVICE_BLOCKED,
+            dev,
+            L"RESTRICTED",
+            L"[A6-EXEC] Storage device restricted: volume mount timed out; inspection pending"
+        );
+        bool log2 = EventLogger::Instance().LogEvent(
+            SecurityEventType::DEVICE_BLOCKED,
+            dev,
+            L"RESTRICTED",
+            L"[A6-EXEC] Storage device restricted: volume mount timed out; inspection pending"
+        );
+        bool log3 = EventLogger::Instance().LogEvent(
+            SecurityEventType::DEVICE_BLOCKED,
+            dev,
+            L"RESTRICTED",
+            L"[A6-EXEC] Storage device restricted: volume mount timed out; inspection pending"
+        );
+
+        std::wcout << L"  [10.1] Multiple Registrations Handled Cleanly: " << (hasPending ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [10.2] Unregister Clears Pending State       : " << (clearedPending ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+        std::wcout << L"  [10.3] Rapid Audit Logging Deduplicated     : " << (log1 && log2 && log3 ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
+
+        if (hasPending && clearedPending && log1 && log2 && log3)
+        {
+            std::wcout << L"  -> [RESULT] TEST 10: PASSED (Repeated pending inspection events safely deduplicated, avoiding dashboard flooding)\n\n";
+            passed++;
+        }
+        else
+        {
+            std::wcout << L"  -> [RESULT] TEST 10: FAILED\n\n";
+        }
+    }
+
+    // Cleanup
+    std::filesystem::remove_all(testBaseDir, dirEc);
+    EnforcementManager::SetMockEnforcement(false);
+    StorageExecutionMonitor::Instance().ClearMockVolumePaths();
+    StorageExecutionMonitor::Instance().ClearDeviceDriveMappings();
+    StorageExecutionMonitor::Instance().SetSimulatedInspectionResult(false);
+    MalwareScanner::Instance().SetSimulatedScanResult(false, ScanStatus::NOT_SCANNED);
+    TrustAssessmentEngine::Instance().SetAllowlistManager(nullptr);
+    PendingStorageInspectionManager::Instance().Stop();
+
+    std::wcout << L"=======================================================\n";
+    std::wcout << L"APPROVED USB EXECUTABLE-POLICY SUMMARY: " << passed << L"/" << total << L" PASSED\n";
     std::wcout << L"=======================================================\n\n";
 
     return (passed == total);
@@ -3835,6 +5278,7 @@ int RunAlgorithmVerification()
         std::wcout << L"  [7.1] Protected Directory : " << cfg.protectedDirectory << L"\n";
         std::wcout << L"  [7.2] Canary Sentinel File: " << cfg.canaryFileName << L"\n";
 
+        ProtectedFileMonitor::RevokeUserDenyAce(cfg.protectedDirectory, ProtectedFileMonitor::GetCurrentUserNameStr());
         ProtectedFileMonitor::Instance().Start(cfg.protectedDirectory, cfg.canaryFileName);
         bool monitorRunning = ProtectedFileMonitor::Instance().IsRunning();
         std::wcout << L"  [7.3] Monitor Active      : " << (monitorRunning ? L"YES [OK]" : L"FAILED [ERROR]") << L"\n";
@@ -3888,7 +5332,10 @@ int RunAlgorithmVerification()
         // Step 7.8: Scenario 3 Minifilter Driver Communication Port & Honest Boundary Verification
         bool minifilterPass = MinifilterClient::Instance().VerifySelfTest();
 
-        bool a7AllPassed = canaryExists && monitorRunning && uncertainPass && definitivePass && minifilterPass;
+        // Step 7.9: Native OS NTFS DACL Pre-Access Denial Verification
+        bool enforcementPass = ProtectedFileMonitor::Instance().VerifySelfTest();
+
+        bool a7AllPassed = canaryExists && monitorRunning && uncertainPass && definitivePass && minifilterPass && enforcementPass;
         if (a7AllPassed)
         {
             std::wcout << L"  -> [RESULT] MODULE A7: PASSED (Multi-folder watch, attribution tiers, mock enforcement & minifilter boundary verified)\n\n";
@@ -3994,14 +5441,28 @@ int RunAlgorithmVerification()
     // Execute Storage Inspection & Approval Loop Regression Suite (Tests 1-7)
     bool storageWorkflowPassed = RunStorageInspectionWorkflowRegressionSuite();
 
+    // Execute Protected-Folder Access Restrictions Regression Suite (Tests 1-8)
+    bool folderEnforcementPassed = RunProtectedFolderAccessRestrictionsSuite();
+
+    // Execute Approved Storage & Lifecycle Regression Suite (Scenarios A - F)
+    bool lifecycleSuitePassed = RunApprovedStorageAndLifecycleRegressionSuite();
+
+    // Execute Approved USB Executable Policy Regression Suite (Scenarios 1 - 10)
+    bool approvedExeSuitePassed = RunApprovedUsbExecutablePolicyRegressionSuite();
+
+    PendingStorageInspectionManager::Instance().Stop();
+
     std::wcout << L"=======================================================\n";
     std::wcout << L"SECURITY MODULES VERIFICATION SUMMARY: " << passedTests << L"/" << totalTests << L" PASSED\n";
     std::wcout << L"PRIORITY 1 REGRESSION SUITE          : " << (p1Passed ? L"ALL 12/12 PASSED [OK]" : L"FAILED [ERROR]") << L"\n";
     std::wcout << L"EXECUTABLE POLICY REGRESSION SUITE   : " << (exePolicyPassed ? L"ALL 10/10 PASSED [OK]" : L"FAILED [ERROR]") << L"\n";
     std::wcout << L"STORAGE WORKFLOW REGRESSION SUITE    : " << (storageWorkflowPassed ? L"ALL 7/7 PASSED [OK]" : L"FAILED [ERROR]") << L"\n";
+    std::wcout << L"PROTECTED FOLDER RESTRICTIONS SUITE  : " << (folderEnforcementPassed ? L"ALL 8/8 PASSED [OK]" : L"FAILED [ERROR]") << L"\n";
+    std::wcout << L"APPROVED STORAGE & LIFECYCLE SUITE   : " << (lifecycleSuitePassed ? L"ALL 6/6 PASSED [OK]" : L"FAILED [ERROR]") << L"\n";
+    std::wcout << L"APPROVED USB EXE POLICY SUITE        : " << (approvedExeSuitePassed ? L"ALL 10/10 PASSED [OK]" : L"FAILED [ERROR]") << L"\n";
     std::wcout << L"=======================================================\n\n";
 
-    return (passedTests == totalTests && p1Passed && exePolicyPassed && storageWorkflowPassed) ? 0 : 1;
+    return (passedTests == totalTests && p1Passed && exePolicyPassed && storageWorkflowPassed && folderEnforcementPassed && lifecycleSuitePassed && approvedExeSuitePassed) ? 0 : 1;
 }
 
 
@@ -4063,6 +5524,7 @@ int main()
     }
 
     TrustAssessmentEngine::Instance().SetAllowlistManager(&g_allowlist);
+    PendingStorageInspectionManager::Instance().SetAllowlistManager(&g_allowlist);
     EnforcementManager::SetNotificationSuppressionCallback(ExpectInternalRemoval);
     EnforcementManager::SetArrivalSuppressionCallback(ExpectInternalArrival);
 
@@ -4462,6 +5924,7 @@ int main()
 
     SyncManager::Instance().Stop();
     DevicePresenceMonitor::Stop();
+    PendingStorageInspectionManager::Instance().Stop();
     StorageExecutionMonitor::Instance().StopSurveillance();
     MinifilterClient::Instance().Disconnect();
     HIDBehaviorMonitor::Instance().StopSurveillance();

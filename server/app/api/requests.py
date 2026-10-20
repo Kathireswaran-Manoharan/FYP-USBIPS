@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, Query, Body
 from typing import List, Optional
 from datetime import datetime, timezone, timedelta
+import uuid
 from ..models.schemas import (
     PendingRequestResponse,
     ApproveRequestPayload,
@@ -190,14 +191,37 @@ def decline_request(
 @router.delete("/{request_id}", response_model=dict)
 def delete_request(request_id: str):
     """
-    Delete / dismiss a pending or resolved authorization request from the dashboard queue.
-    If the device connects again, it will be evaluated cleanly under standard zero-trust policy.
+    Delete / dismiss an authorization request and permanently remove the device from master_allowlist.
+    If the device connects again, it will be evaluated cleanly under standard zero-trust policy (new authorization required).
     """
+    now = utc_now_iso()
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM pending_requests WHERE request_id = ?;", (request_id,))
-        if cursor.rowcount == 0:
+        cursor.execute("SELECT vendor_id, product_id, serial_number, device_type, description FROM pending_requests WHERE request_id = ?;", (request_id,))
+        req = cursor.fetchone()
+        if not req:
             raise HTTPException(status_code=404, detail="Request not found")
+
+        # 1. Purge from master_allowlist so the device is no longer allowlisted or silently auto-approved
+        cursor.execute("""
+            DELETE FROM master_allowlist
+            WHERE vendor_id = ? AND product_id = ? AND serial_number = ?;
+        """, (req["vendor_id"], req["product_id"], req["serial_number"]))
+
+        # 2. Delete the request
+        cursor.execute("DELETE FROM pending_requests WHERE request_id = ?;", (request_id,))
+
+        # 3. Log permanent removal audit event
+        event_id = str(uuid.uuid4())
+        cursor.execute("""
+            INSERT INTO server_events (
+                event_id, client_id, timestamp, event_type, vendor_id, product_id,
+                serial_number, device_id, device_type, description, decision, reason, received_at
+            ) VALUES (?, 'CENTRAL_SERVER', ?, 'DEVICE_REMOVED', ?, ?, ?, '', ?, ?, 'REMOVED', 'Device record permanently removed from dashboard queue and allowlist', ?);
+        """, (
+            event_id, now, req["vendor_id"], req["product_id"], req["serial_number"],
+            req["device_type"] or "OTHER", req["description"] or "", now
+        ))
             
     return {
         "status": "success",
