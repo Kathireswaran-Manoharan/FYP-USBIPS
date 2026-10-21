@@ -98,7 +98,7 @@ inline const wchar_t* RiskSeverityToString(RiskSeverity sev)
 
 struct ModuleAssessment
 {
-    std::wstring moduleId;    // "A1", "A2", ..., "A11"
+    std::wstring moduleId;    // "A1" through "A10"
     std::wstring moduleName;  // "Fingerprinting", "CompositeDetection", etc.
     AssessmentStatus status = AssessmentStatus::NOT_ASSESSED;
     int riskWeight = 0;       // Points added to risk score
@@ -118,12 +118,12 @@ struct TrustAssessmentReport
 
     // Distinct evidence categories
     bool deviceIdentityMatch = false;               // A1: Triplet match
-    bool adminAuthorized = false;                   // A11: Explicit admin allowlist
+    bool adminAuthorized = false;                   // A9: Explicit admin allowlist
     std::wstring malwareScanResult = L"NOT_SCANNED";// A4: CLEAN, DETECTED, FAILED, UNAVAILABLE, NOT_SCANNED
     std::wstring executablePolicyStatus = L"COMPLIANT"; // COMPLIANT, PROHIBITED_EXE_DETECTED, BLOCKED
     std::wstring exactThreatFile;
     std::wstring exactThreatEvidence;
-    int behavioralRiskScore = 0;                    // A3, A6, A7, A8, A9, A10
+    int behavioralRiskScore = 0;                    // A3, A6, A7, A8
     std::wstring actualWindowsEnforcement = L"PENDING"; // SUCCESS, CR_ACCESS_DENIED, CR_NOT_DISABLEABLE, APP_ZERO_TRUST_LOCK
     HIDVerificationResult hidVerification;          // Stage B-D verification evidence
 

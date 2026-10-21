@@ -34,7 +34,6 @@ enum class SecurityEventType
     COMPOSITE_POLICY_VIOLATION,
     PROTECTED_FILE_ACCESS,
     STORAGE_EXECUTION_BLOCKED,
-    NETWORK_ANOMALY_DETECTED,
     RECONNECTION_EVASION_DETECTED,
     MALWARE_DETECTED,
     SUSPICIOUS_FILE_DETECTED,
@@ -107,8 +106,6 @@ inline const wchar_t* SecurityEventTypeToString(SecurityEventType type)
         return L"PROTECTED_FILE_ACCESS";
     case SecurityEventType::STORAGE_EXECUTION_BLOCKED:
         return L"STORAGE_EXECUTION_BLOCKED";
-    case SecurityEventType::NETWORK_ANOMALY_DETECTED:
-        return L"NETWORK_ANOMALY_DETECTED";
     case SecurityEventType::RECONNECTION_EVASION_DETECTED:
         return L"RECONNECTION_EVASION_DETECTED";
     case SecurityEventType::MALWARE_DETECTED:
@@ -158,7 +155,6 @@ inline SecurityEventType StringToSecurityEventType(const std::wstring& str)
     if (str == L"COMPOSITE_POLICY_VIOLATION") return SecurityEventType::COMPOSITE_POLICY_VIOLATION;
     if (str == L"PROTECTED_FILE_ACCESS") return SecurityEventType::PROTECTED_FILE_ACCESS;
     if (str == L"STORAGE_EXECUTION_BLOCKED") return SecurityEventType::STORAGE_EXECUTION_BLOCKED;
-    if (str == L"NETWORK_ANOMALY_DETECTED") return SecurityEventType::NETWORK_ANOMALY_DETECTED;
     if (str == L"RECONNECTION_EVASION_DETECTED") return SecurityEventType::RECONNECTION_EVASION_DETECTED;
     if (str == L"MALWARE_DETECTED") return SecurityEventType::MALWARE_DETECTED;
     if (str == L"SUSPICIOUS_FILE_DETECTED") return SecurityEventType::SUSPICIOUS_FILE_DETECTED;

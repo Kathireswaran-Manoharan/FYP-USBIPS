@@ -176,7 +176,7 @@ class StatsResponse(BaseModel):
     pending_requests: int
     total_events: int
 
-# --- Policy Configuration Schemas (Algorithms 1-7) ---
+# --- Policy Configuration Schema ---
 class PolicyConfigSchema(BaseModel):
     strict_allowlist_matching: bool = True
     fail_closed_when_server_offline: bool = True
@@ -189,11 +189,8 @@ class PolicyConfigSchema(BaseModel):
     block_unauthorized_composite: bool = True
     allow_composite_mouse_keyboard: bool = True
     protected_directory: str = "C:\\USBIPS_Protected"
-    canary_file_name: str = "confidential_canary.txt"
     block_storage_execution: bool = True
     auto_terminate_storage_processes: bool = True
-    block_usb_network_adapters: bool = True
-    alert_on_gateway_override: bool = True
     max_reconnects_per_minute: int = 3
     flap_window_seconds: int = 15
     evasion_risk_threshold: int = 70
@@ -241,5 +238,3 @@ class DeviceRecoveryRequest(BaseModel):
     admin_user: Optional[str] = "Administrator"
     reason: Optional[str] = "Cleared unverified scan error revocation"
     force_override: Optional[bool] = False
-
-

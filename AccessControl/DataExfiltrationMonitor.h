@@ -13,8 +13,7 @@
 enum class ExfiltrationRisk
 {
     NORMAL,
-    SUSPICIOUS_VOLUME,
-    CRITICAL_CANARY_CORRELATED
+    SUSPICIOUS_VOLUME
 };
 
 inline const wchar_t* ExfiltrationRiskToString(ExfiltrationRisk risk)
@@ -25,8 +24,6 @@ inline const wchar_t* ExfiltrationRiskToString(ExfiltrationRisk risk)
         return L"NORMAL";
     case ExfiltrationRisk::SUSPICIOUS_VOLUME:
         return L"SUSPICIOUS_VOLUME";
-    case ExfiltrationRisk::CRITICAL_CANARY_CORRELATED:
-        return L"CRITICAL_CANARY_CORRELATED";
     default:
         return L"UNKNOWN";
     }
@@ -46,7 +43,7 @@ class DataExfiltrationMonitor
 public:
     static DataExfiltrationMonitor& Instance();
 
-    // Module A8: Record and evaluate file write events on removable storage
+    // Module A7: Record and evaluate file write events on removable storage
     void RecordFileWrite(const std::wstring& driveLetter, const std::wstring& fileName, uint64_t fileSize = 0);
     ExfiltrationRisk EvaluateRisk(const std::wstring& driveLetter, std::wstring& outDetails);
 

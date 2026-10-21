@@ -570,18 +570,11 @@ bool RestClient::FetchPolicyConfig(PolicyConfig& outConfig)
         {
             outConfig.protectedDirectory = Utf8ToWide(parsed["protected_directory"].get<std::string>());
         }
-        if (parsed.contains("canary_file_name") && parsed["canary_file_name"].is_string())
-        {
-            outConfig.canaryFileName = Utf8ToWide(parsed["canary_file_name"].get<std::string>());
-        }
         outConfig.enforceFolderProtectionOnUsb = parsed.value("enforce_folder_protection_on_usb", outConfig.enforceFolderProtectionOnUsb);
         outConfig.deactivateProtectionOnUsbRemoval = parsed.value("deactivate_protection_on_usb_removal", outConfig.deactivateProtectionOnUsbRemoval);
 
         outConfig.blockStorageExecution = parsed.value("block_storage_execution", outConfig.blockStorageExecution);
         outConfig.autoTerminateStorageProcesses = parsed.value("auto_terminate_storage_processes", outConfig.autoTerminateStorageProcesses);
-
-        outConfig.blockUsbNetworkAdapters = parsed.value("block_usb_network_adapters", outConfig.blockUsbNetworkAdapters);
-        outConfig.alertOnGatewayOverride = parsed.value("alert_on_gateway_override", outConfig.alertOnGatewayOverride);
 
         outConfig.maxReconnectsPerMinute = parsed.value("max_reconnects_per_minute", outConfig.maxReconnectsPerMinute);
         outConfig.flapWindowSeconds = parsed.value("flap_window_seconds", outConfig.flapWindowSeconds);
@@ -783,4 +776,3 @@ bool RestClient::RecoverDevice(
         return false;
     }
 }
-

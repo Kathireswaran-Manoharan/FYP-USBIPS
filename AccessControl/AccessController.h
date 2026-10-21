@@ -25,11 +25,7 @@ struct PolicyDecisionRecord
     bool           alg3CompositeBlock  = false;
     std::wstring   alg3Reason;
 
-    // Algorithm 6 — Network Anomaly
-    bool           alg6NetworkAnomaly  = false;
-    std::wstring   alg6Reason;
-
-    // Algorithm 7 — Reconnection Evasion
+    // Algorithm 6 — Reconnection Evasion
     bool           alg7EvasionDetected = false;
     std::wstring   alg7Reason;
 

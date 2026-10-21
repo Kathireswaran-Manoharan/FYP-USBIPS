@@ -1,6 +1,5 @@
 #include "DataExfiltrationMonitor.h"
 #include "PolicyConfig.h"
-#include "ProtectedFileMonitor.h"
 #include "../Logging/EventLogger.h"
 
 #include <iostream>
@@ -80,19 +79,10 @@ ExfiltrationRisk DataExfiltrationMonitor::EvaluateRisk(const std::wstring& drive
         }
     }
 
-    // Check Canary Correlation: If protected canary was accessed, and writes occur to USB
-    bool canaryCorrelation = ProtectedFileMonitor::Instance().IsCanaryAccessCorrelated();
-
     ExfiltrationRisk risk = ExfiltrationRisk::NORMAL;
     std::wostringstream ss;
 
-    if (canaryCorrelation && driveWriteCount > 0)
-    {
-        risk = ExfiltrationRisk::CRITICAL_CANARY_CORRELATED;
-        ss << L"CRITICAL EXFILTRATION: Protected canary directory accessed recently and "
-           << driveWriteCount << L" file write(s) observed on removable volume " << driveLetter;
-    }
-    else if (driveWriteCount >= cfg.exfiltrationMaxFileTouches || sensitiveCount >= 3)
+    if (driveWriteCount >= cfg.exfiltrationMaxFileTouches || sensitiveCount >= 3)
     {
         risk = ExfiltrationRisk::SUSPICIOUS_VOLUME;
         ss << L"SUSPICIOUS COPY: High-volume write burst detected on removable volume " << driveLetter
@@ -115,7 +105,7 @@ ExfiltrationRisk DataExfiltrationMonitor::EvaluateRisk(const std::wstring& drive
             SecurityEventType::DATA_EXFILTRATION_DETECTED,
             L"",
             driveLetter,
-            (risk == ExfiltrationRisk::CRITICAL_CANARY_CORRELATED) ? L"BLOCK" : L"ASK",
+            L"ASK",
             L"[ALG8] " + outDetails
         );
     }
@@ -202,20 +192,12 @@ bool DataExfiltrationMonitor::VerifySelfTest()
     bool t2 = (r2 == ExfiltrationRisk::SUSPICIOUS_VOLUME);
     std::wcout << L"        12 file burst -> " << ExfiltrationRiskToString(r2) << (t2 ? L" [OK]" : L" [FAIL]") << L"\n";
 
-    std::wcout << L"  [8.3] Testing protected canary correlation with USB writes...\n";
-    // Simulate canary access correlation
-    ProtectedFileMonitor::Instance().SimulateCanaryTouch();
-    ExfiltrationRisk r3 = EvaluateRisk(L"E:", details);
-    bool t3 = (r3 == ExfiltrationRisk::CRITICAL_CANARY_CORRELATED);
-    std::wcout << L"        Canary access + USB writes -> " << ExfiltrationRiskToString(r3) << (t3 ? L" [OK]" : L" [FAIL]") << L"\n";
-    ProtectedFileMonitor::Instance().ClearCanaryCorrelation();
-
-    std::wcout << L"  [8.4] Checking Windows OS WriteProtect registry configuration...\n";
+    std::wcout << L"  [8.3] Checking Windows OS WriteProtect registry configuration...\n";
     bool wp = IsOsWriteProtectionEnabled();
     std::wcout << L"        StorageDevicePolicies\\WriteProtect : " << (wp ? L"ENABLED (Read-Only)" : L"DISABLED (Standard R/W)") << L" [OK]\n";
     std::wcout << L"        Enforcement Scope : Observable user-mode file rate detection;\n"
                << L"                            OS-level write blocking requires StorageDevicePolicies or minifilter driver.\n";
 
     ResetState();
-    return (t1 && t2 && t3);
+    return (t1 && t2);
 }

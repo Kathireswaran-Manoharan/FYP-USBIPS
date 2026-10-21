@@ -74,7 +74,7 @@
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;USBIPS_ENABLE_TEST_MODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
     </ClCompile>
@@ -108,7 +108,7 @@
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;_DEBUG;_CONSOLE;USBIPS_ENABLE_TEST_MODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
     </ClCompile>
@@ -142,10 +142,8 @@
     <ClCompile Include="AccessControl\AccessController.cpp" />
     <ClCompile Include="AccessControl\CompositeDevicePolicy.cpp" />
     <ClCompile Include="AccessControl\HIDBehaviorMonitor.cpp" />
-    <ClCompile Include="AccessControl\MinifilterClient.cpp" />
     <ClCompile Include="AccessControl\ProtectedFileMonitor.cpp" />
     <ClCompile Include="AccessControl\StorageExecutionMonitor.cpp" />
-    <ClCompile Include="AccessControl\USBNetworkAnomalyDetector.cpp" />
     <ClCompile Include="AccessControl\ReconnectionEvasionAnalyzer.cpp" />
     <ClCompile Include="AccessControl\MalwareScanner.cpp" />
     <ClCompile Include="AccessControl\SuspiciousFileDetector.cpp" />
@@ -168,12 +166,10 @@
     <ClInclude Include="AccessControl\AccessController.h" />
     <ClInclude Include="AccessControl\CompositeDevicePolicy.h" />
     <ClInclude Include="AccessControl\HIDBehaviorMonitor.h" />
-    <ClInclude Include="AccessControl\MinifilterClient.h" />
     <ClInclude Include="AccessControl\PolicyConfig.h" />
     <ClInclude Include="AccessControl\ProtectedFileMonitor.h" />
     <ClInclude Include="AccessControl\ProtectedFolderPolicy.h" />
     <ClInclude Include="AccessControl\StorageExecutionMonitor.h" />
-    <ClInclude Include="AccessControl\USBNetworkAnomalyDetector.h" />
     <ClInclude Include="AccessControl\ReconnectionEvasionAnalyzer.h" />
     <ClInclude Include="AccessControl\MalwareScanner.h" />
     <ClInclude Include="AccessControl\SuspiciousFileDetector.h" />

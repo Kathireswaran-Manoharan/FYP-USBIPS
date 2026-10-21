@@ -1,6 +1,5 @@
 #include "AccessController.h"
 #include "CompositeDevicePolicy.h"
-#include "USBNetworkAnomalyDetector.h"
 #include "ReconnectionEvasionAnalyzer.h"
 
 
@@ -60,20 +59,6 @@ AccessDecision AccessController::EvaluateWithDetails(
         outRecord.alg3CompositeBlock = true;
         outRecord.alg3Reason         = compositeReason;
         outRecord.primaryReason      = L"[ALG3] " + compositeReason;
-        outRecord.decision           = AccessDecision::BLOCK;
-        return outRecord.decision;
-    }
-
-    // ----------------------------------------------------------
-    // Algorithm 6: USB Network Anomaly Detection
-    // Detect rogue USB Ethernet/RNDIS gadgets
-    // ----------------------------------------------------------
-    NetworkAnomalyReport netReport;
-    if (USBNetworkAnomalyDetector::Instance().EvaluateDevice(device, netReport))
-    {
-        outRecord.alg6NetworkAnomaly = true;
-        outRecord.alg6Reason         = netReport.reason;
-        outRecord.primaryReason      = netReport.reason;
         outRecord.decision           = AccessDecision::BLOCK;
         return outRecord.decision;
     }

@@ -4,11 +4,11 @@ from typing import Dict, Any
 from ..database.db import get_db, utc_now_iso
 from ..models.schemas import PolicyConfigSchema
 
-router = APIRouter(prefix="/api/policies", tags=["Security Policies (Algorithms 1-7)"])
+router = APIRouter(prefix="/api/policies", tags=["Security Policies"])
 
 @router.get("", response_model=PolicyConfigSchema)
 def get_policies():
-    """Fetch current central security policies for Algorithms 1-7."""
+    """Fetch current central security policies."""
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("""
@@ -17,9 +17,8 @@ def get_policies():
                    captcha_max_attempts, iki_burst_threshold_cps,
                    iki_min_variance_ms, hid_surveillance_window_seconds,
                    block_unauthorized_composite, allow_composite_mouse_keyboard,
-                   protected_directory, canary_file_name,
+                   protected_directory,
                    block_storage_execution, auto_terminate_storage_processes,
-                   block_usb_network_adapters, alert_on_gateway_override,
                    max_reconnects_per_minute, flap_window_seconds,
                    evasion_risk_threshold
             FROM policies WHERE id = 1;
@@ -40,11 +39,8 @@ def get_policies():
             block_unauthorized_composite=bool(row["block_unauthorized_composite"]),
             allow_composite_mouse_keyboard=bool(row["allow_composite_mouse_keyboard"]),
             protected_directory=str(row["protected_directory"]),
-            canary_file_name=str(row["canary_file_name"]),
             block_storage_execution=bool(row["block_storage_execution"]),
             auto_terminate_storage_processes=bool(row["auto_terminate_storage_processes"]),
-            block_usb_network_adapters=bool(row["block_usb_network_adapters"]),
-            alert_on_gateway_override=bool(row["alert_on_gateway_override"]),
             max_reconnects_per_minute=int(row["max_reconnects_per_minute"]),
             flap_window_seconds=int(row["flap_window_seconds"]),
             evasion_risk_threshold=int(row["evasion_risk_threshold"])
@@ -52,7 +48,7 @@ def get_policies():
 
 @router.put("", response_model=PolicyConfigSchema)
 def update_policies(policy: PolicyConfigSchema):
-    """Update fleetwide security policies for Algorithms 1-7."""
+    """Update fleetwide security policies."""
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("""
@@ -68,11 +64,8 @@ def update_policies(policy: PolicyConfigSchema):
                 block_unauthorized_composite = ?,
                 allow_composite_mouse_keyboard = ?,
                 protected_directory = ?,
-                canary_file_name = ?,
                 block_storage_execution = ?,
                 auto_terminate_storage_processes = ?,
-                block_usb_network_adapters = ?,
-                alert_on_gateway_override = ?,
                 max_reconnects_per_minute = ?,
                 flap_window_seconds = ?,
                 evasion_risk_threshold = ?,
@@ -90,11 +83,8 @@ def update_policies(policy: PolicyConfigSchema):
             1 if policy.block_unauthorized_composite else 0,
             1 if policy.allow_composite_mouse_keyboard else 0,
             policy.protected_directory,
-            policy.canary_file_name,
             1 if policy.block_storage_execution else 0,
             1 if policy.auto_terminate_storage_processes else 0,
-            1 if policy.block_usb_network_adapters else 0,
-            1 if policy.alert_on_gateway_override else 0,
             policy.max_reconnects_per_minute,
             policy.flap_window_seconds,
             policy.evasion_risk_threshold,
@@ -107,4 +97,3 @@ def reset_policies():
     """Reset central security policies to safe defaults."""
     default_policy = PolicyConfigSchema()
     return update_policies(default_policy)
-

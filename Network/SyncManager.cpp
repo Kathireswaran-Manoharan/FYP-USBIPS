@@ -8,8 +8,6 @@
 #include "../AccessControl/ProtectedFileMonitor.h"
 #include "../AccessControl/StorageExecutionMonitor.h"
 #include "../AccessControl/TrustAssessmentEngine.h"
-#include "../AccessControl/USBNetworkAnomalyDetector.h"
-#include "../AccessControl/MinifilterClient.h"
 
 #include <iostream>
 
@@ -99,7 +97,6 @@ bool SyncManager::Start(
     m_allowlist = allowlist;
     m_intervalSeconds = intervalSeconds > 0 ? intervalSeconds : 15;
 
-    ProtectedFileMonitor::Instance().SetAllowlistManager(allowlist);
 
     RestClient::Instance().Configure(host, port);
 
@@ -270,7 +267,6 @@ bool SyncManager::PerformSyncCycle()
                                         L"Central server approved authorization; physical peripheral enabled in real-time"
                                     );
 
-                                    ProtectedFileMonitor::Instance().SetActiveDevice(item.device);
                                 }
                                 else
                                 {
@@ -298,7 +294,6 @@ bool SyncManager::PerformSyncCycle()
                                             L"Central server approved authorization; storage inspection clean, released at OS level"
                                         );
 
-                                        ProtectedFileMonitor::Instance().SetActiveDevice(item.device);
                                         RestClient::Instance().CheckOrRequestDevice(EventLogger::Instance().GetClientId(), item.device, &postReport);
                                     }
                                     else if (isThreat)
@@ -363,7 +358,7 @@ bool SyncManager::PerformSyncCycle()
             }
         }
 
-        // 4. Central Policy Synchronization (Algorithms 1-7)
+        // 4. Central Policy Synchronization
         PolicyConfig remotePolicy;
         if (RestClient::Instance().FetchPolicyConfig(remotePolicy))
         {
@@ -374,21 +369,15 @@ bool SyncManager::PerformSyncCycle()
         std::vector<ProtectedFolder> remoteFolders;
         if (RestClient::Instance().FetchProtectedFolderPolicies(remoteFolders))
         {
-            ProtectedFileMonitor::Instance().UpdateWatchedFolders(remoteFolders);
-            MinifilterClient::Instance().SyncPolicies(remoteFolders);
+            ProtectedFileMonitor::Instance().UpdateProtectedFolders(remoteFolders);
         }
 
-        // 5. Periodic Behavioral Scans (Algorithms 5 & 6)
+        // 5. Periodic storage execution surveillance
         if (PolicyConfig::Instance().blockStorageExecution)
         {
             StorageExecutionMonitor::Instance().ScanRunningProcesses(
                 PolicyConfig::Instance().autoTerminateStorageProcesses
             );
-        }
-
-        if (PolicyConfig::Instance().blockUsbNetworkAdapters)
-        {
-            USBNetworkAnomalyDetector::Instance().InspectAdapters();
         }
 
         // 6. Batch Upload Pending Events

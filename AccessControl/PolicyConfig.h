@@ -23,7 +23,6 @@ struct PolicyConfig
 
     // Algorithm 4: Protected-File & Multi-Folder Policy Access Restrictions
     std::wstring protectedDirectory = L"C:\\USBIPS_Protected";
-    std::wstring canaryFileName = L"confidential_canary.txt";
     bool enforceFolderProtectionOnUsb = true;
     bool deactivateProtectionOnUsbRemoval = true;
 
@@ -31,11 +30,7 @@ struct PolicyConfig
     bool blockStorageExecution = true;
     bool autoTerminateStorageProcesses = true;
 
-    // Algorithm 6: USB Network & DNS Anomaly Detection
-    bool blockUsbNetworkAdapters = true;
-    bool alertOnGatewayOverride = true;
-
-    // Algorithm 7: Reconnection & Policy Evasion
+    // Algorithm 6: Reconnection & Policy Evasion
     int maxReconnectsPerMinute = 3;
     int flapWindowSeconds = 15;
     int evasionRiskThreshold = 70;
@@ -50,12 +45,12 @@ struct PolicyConfig
     // Module A5: Suspicious File & Script Detection
     bool enableSuspiciousFileScan = true;
 
-    // Module A8: Data Exfiltration & Copy Surveillance
+    // Module A7: Data Exfiltration & Copy Surveillance
     bool enableExfiltrationMonitoring = true;
     int exfiltrationMaxFileTouches = 10;
     int exfiltrationWindowSeconds = 30;
 
-    // Module A12: Trust Assessment Engine
+    // Module A10: Trust Assessment Engine
     int trustThresholdScore = 30; // Maximum risk score (0-100) for review recommendation
     bool requireCleanScanForApproval = true;
 

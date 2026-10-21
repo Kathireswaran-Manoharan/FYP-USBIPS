@@ -398,7 +398,6 @@ class TestUSBIPSServer(unittest.TestCase):
         self.assertEqual(policy["captcha_max_attempts"], 3)
         self.assertEqual(policy["iki_burst_threshold_cps"], 30)
         self.assertTrue(policy["block_storage_execution"])
-        self.assertTrue(policy["block_usb_network_adapters"])
         self.assertEqual(policy["max_reconnects_per_minute"], 3)
 
         # 2. PUT updated policies
@@ -433,7 +432,7 @@ class TestUSBIPSServer(unittest.TestCase):
         self.assertEqual(reset_policy["max_reconnects_per_minute"], 3)
 
     def test_12_trust_assessment_and_security_events(self):
-        """Verify server ingests and serves TAE and security module events (A1-A12)."""
+        """Verify server ingests and serves TAE and security module events (A1-A10)."""
         client_id = "tae-test-client-001"
         self.client.post("/api/clients/register", json={
             "client_id": client_id, "hostname": "TAE-TEST-HOST",
@@ -454,7 +453,7 @@ class TestUSBIPSServer(unittest.TestCase):
                 "device_type": "HID",
                 "description": "Standard Trusted Mouse",
                 "decision": "ALLOW",
-                "reason": "[A12-TAE] Score=10 Severity=LOW Rec=APPROVE | Identity:MATCH Admin:AUTHORIZED"
+                "reason": "[A10-TAE] Score=10 Severity=LOW Rec=APPROVE | Identity:MATCH Admin:AUTHORIZED"
             },
             {
                 "event_id": "malware-001",
@@ -496,7 +495,7 @@ class TestUSBIPSServer(unittest.TestCase):
                 "device_type": "STORAGE",
                 "description": "Removable USB Drive",
                 "decision": "BLOCK",
-                "reason": "[A8-EXFIL] Exfiltration burst: 8 sensitive files written after canary access"
+                "reason": "[A7-EXFIL] Exfiltration burst: 8 sensitive files written to removable storage"
             }
         ]
 
@@ -519,7 +518,7 @@ class TestUSBIPSServer(unittest.TestCase):
         tae_evt = next(e for e in fetched if e["event_id"] == "tae-001")
         self.assertEqual(tae_evt["event_type"], "TRUST_ASSESSMENT_COMPLETED")
         self.assertEqual(tae_evt["decision"], "ALLOW")
-        self.assertIn("[A12-TAE]", tae_evt["reason"])
+        self.assertIn("[A10-TAE]", tae_evt["reason"])
 
         exfil_evt = next(e for e in fetched if e["event_id"] == "exfil-001")
         self.assertEqual(exfil_evt["event_type"], "DATA_EXFILTRATION_DETECTED")
@@ -855,7 +854,7 @@ class TestUSBIPSServer(unittest.TestCase):
     def test_18_end_to_end_server_client_review_and_revocation_cycle(self):
         """
         Verify complete end-to-end cycle:
-        1. Client submits unknown device with full A1-A12 assessment.
+        1. Client submits unknown device with full A1-A10 assessment.
         2. Status is PENDING.
         3. Admin views pending list and all 12 modules.
         4. Admin approves with 60m duration.
@@ -2396,8 +2395,6 @@ class TestUSBIPSServer(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-
 
 
 

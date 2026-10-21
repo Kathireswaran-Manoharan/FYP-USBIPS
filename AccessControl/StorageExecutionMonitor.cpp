@@ -896,7 +896,7 @@ bool StorageExecutionMonitor::VerifySelfTest()
                << (osPolicyActive ? L"ACTIVE [NATIVE OS PRE-BLOCK]" : L"INACTIVE / REQUIRES_ADMIN [OK]") << L"\n";
     std::wcout << L"        Polling Surveillance Loop Interval                : 500ms snapshots (Kill-on-launch)\n";
     std::wcout << L"        Technical Execution Boundary                      : Polling snapshotting kills active processes post-facto;\n"
-               << L"                                                            Pre-execution prevention requires Group Policy Deny_Execute or Minifilter.\n";
+               << L"                                                            Pre-execution prevention requires Group Policy Deny_Execute.\n";
 
     // 5.4 Simulated binary execution from removable volume (E:\payload.exe) with mocked enforcement
     std::wcout << L"  [5.4] Scenario 1 Verification: Binary execution from removable volume (E:\\payload.exe)...\n";
@@ -1310,7 +1310,6 @@ void PendingStorageInspectionManager::CheckSinglePendingDevice(const USBDevice& 
         if (storageClean && !isThreat)
         {
             DevicePresenceMonitor::SetDeviceState(dev.deviceId, DeviceTrackingState::RELEASED);
-            ProtectedFileMonitor::Instance().SetActiveDevice(dev);
 
             std::wcout << L"[PENDING-INSPECTION] Inspection CLEAN! Device released from quarantine: "
                        << dev.deviceId << L"\n";
@@ -1373,4 +1372,3 @@ void PendingStorageInspectionManager::CheckSinglePendingDevice(const USBDevice& 
         UnregisterDevice(dev.deviceId);
     }
 }
-

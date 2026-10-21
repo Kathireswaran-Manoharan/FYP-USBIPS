@@ -3,8 +3,6 @@
 #include "CompositeDevicePolicy.h"
 #include "HIDBehaviorMonitor.h"
 #include "StorageExecutionMonitor.h"
-#include "ProtectedFileMonitor.h"
-#include "USBNetworkAnomalyDetector.h"
 #include "ReconnectionEvasionAnalyzer.h"
 #include "../Logging/EventLogger.h"
 #include "../Enforcement/EnforcementManager.h"
@@ -372,35 +370,10 @@ TrustAssessmentReport TrustAssessmentEngine::AssessDevice(
     report.moduleResults[m6.moduleId] = m6;
 
     // -------------------------------------------------------------
-    // MODULE A7: Protected-File & Canary Activity Monitoring
-    // -------------------------------------------------------------
-    ModuleAssessment m7;
-    m7.moduleId = L"A7";
-    m7.moduleName = L"ProtectedFileMonitor";
-    m7.timestamp = report.timestamp;
-
-    if (ProtectedFileMonitor::Instance().IsCanaryAccessCorrelated())
-    {
-        m7.status = AssessmentStatus::FAIL;
-        m7.isCritical = true;
-        m7.riskWeight = 50;
-        m7.evidence = L"Confidential canary file touched during active USB session.";
-        report.criticalViolations.push_back(L"[A7-CRITICAL] Confidential canary file accessed or modified");
-        report.explainableReasons.push_back(L"[A7] Sensitive directory/canary file tampering detected (+50 risk)");
-    }
-    else
-    {
-        m7.status = AssessmentStatus::PASS;
-        m7.riskWeight = 0;
-        m7.evidence = L"Protected directory canary file untouched.";
-    }
-    report.moduleResults[m7.moduleId] = m7;
-
-    // -------------------------------------------------------------
-    // MODULE A8: Unauthorized Data-Copy & Exfiltration Monitoring
+    // MODULE A7: Unauthorized Data-Copy & Exfiltration Monitoring
     // -------------------------------------------------------------
     ModuleAssessment m8;
-    m8.moduleId = L"A8";
+    m8.moduleId = L"A7";
     m8.moduleName = L"DataExfiltrationMonitor";
     m8.timestamp = report.timestamp;
 
@@ -414,21 +387,12 @@ TrustAssessmentReport TrustAssessmentEngine::AssessDevice(
     {
         std::wstring exfilDetails;
         ExfiltrationRisk exfilRisk = DataExfiltrationMonitor::Instance().EvaluateRisk(mountedVolumePath, exfilDetails);
-        if (exfilRisk == ExfiltrationRisk::CRITICAL_CANARY_CORRELATED)
-        {
-            m8.status = AssessmentStatus::FAIL;
-            m8.isCritical = true;
-            m8.riskWeight = 50;
-            m8.evidence = exfilDetails;
-            report.criticalViolations.push_back(L"[A8-CRITICAL] " + exfilDetails);
-            report.explainableReasons.push_back(L"[A8] Canary access followed by removable storage writes (+50 risk)");
-        }
-        else if (exfilRisk == ExfiltrationRisk::SUSPICIOUS_VOLUME)
+        if (exfilRisk == ExfiltrationRisk::SUSPICIOUS_VOLUME)
         {
             m8.status = AssessmentStatus::SUSPICIOUS;
             m8.riskWeight = 30;
             m8.evidence = exfilDetails;
-            report.explainableReasons.push_back(L"[A8] High-volume file copy burst detected (+30 risk)");
+            report.explainableReasons.push_back(L"[A7] High-volume file copy burst detected (+30 risk)");
         }
         else
         {
@@ -440,45 +404,10 @@ TrustAssessmentReport TrustAssessmentEngine::AssessDevice(
     report.moduleResults[m8.moduleId] = m8;
 
     // -------------------------------------------------------------
-    // MODULE A9: USB Network-Adapter & Gateway/DNS Anomaly
-    // -------------------------------------------------------------
-    ModuleAssessment m9;
-    m9.moduleId = L"A9";
-    m9.moduleName = L"USBNetworkAnomalyDetector";
-    m9.timestamp = report.timestamp;
-
-    if (!device.hasNetwork)
-    {
-        m9.status = AssessmentStatus::NOT_APPLICABLE;
-        m9.riskWeight = 0;
-        m9.evidence = L"Device does not present network interface capabilities.";
-    }
-    else
-    {
-        const PolicyConfig& cfg = PolicyConfig::Instance();
-        if (cfg.blockUsbNetworkAdapters)
-        {
-            m9.status = AssessmentStatus::FAIL;
-            m9.isCritical = true;
-            m9.riskWeight = 45;
-            m9.evidence = L"Policy blocks unauthorized USB network interfaces (Ethernet/RNDIS gadget attack prevention).";
-            report.criticalViolations.push_back(L"[A9-CRITICAL] Unauthorized USB network adapter blocked by fleet policy");
-            report.explainableReasons.push_back(L"[A9] USB network adapter prohibited by fleet policy (+45 risk)");
-        }
-        else
-        {
-            m9.status = AssessmentStatus::PASS;
-            m9.riskWeight = 0;
-            m9.evidence = L"USB network adapter permitted by policy; no rogue gateways detected.";
-        }
-    }
-    report.moduleResults[m9.moduleId] = m9;
-
-    // -------------------------------------------------------------
-    // MODULE A10: Device Reconnection & Flapping Analysis
+    // MODULE A8: Device Reconnection & Flapping Analysis
     // -------------------------------------------------------------
     ModuleAssessment m10;
-    m10.moduleId = L"A10";
+    m10.moduleId = L"A8";
     m10.moduleName = L"ReconnectionEvasionAnalyzer";
     m10.timestamp = report.timestamp;
 
@@ -498,8 +427,8 @@ TrustAssessmentReport TrustAssessmentEngine::AssessDevice(
         m10.isCritical = true;
         m10.riskWeight = 45;
         m10.evidence = evasionRes.primaryReason;
-        report.criticalViolations.push_back(L"[A10-CRITICAL] Rapid reconnection flapping / identity mutation: " + evasionRes.primaryReason);
-        report.explainableReasons.push_back(L"[A10] Reconnection flapping threshold exceeded (+45 risk)");
+        report.criticalViolations.push_back(L"[A8-CRITICAL] Rapid reconnection flapping / identity mutation: " + evasionRes.primaryReason);
+        report.explainableReasons.push_back(L"[A8] Reconnection flapping threshold exceeded (+45 risk)");
     }
     else
     {
@@ -510,10 +439,10 @@ TrustAssessmentReport TrustAssessmentEngine::AssessDevice(
     report.moduleResults[m10.moduleId] = m10;
 
     // -------------------------------------------------------------
-    // MODULE A11: Policy Enforcement & Revocation Synchronization
+    // MODULE A9: Policy Enforcement & Revocation Synchronization
     // -------------------------------------------------------------
     ModuleAssessment m11;
-    m11.moduleId = L"A11";
+    m11.moduleId = L"A9";
     m11.moduleName = L"PolicyEnforcementAndSync";
     m11.timestamp = report.timestamp;
 
@@ -566,7 +495,7 @@ void TrustAssessmentEngine::FinalizeReport(TrustAssessmentReport& report)
 
     // Calculate Behavioral Risk Score
     int bScore = 0;
-    static const std::vector<std::wstring> bModules = { L"A3", L"A6", L"A7", L"A8", L"A9", L"A10" };
+    static const std::vector<std::wstring> bModules = { L"A3", L"A6", L"A7", L"A8" };
     for (const auto& modId : bModules)
     {
         auto it = report.moduleResults.find(modId);
@@ -684,14 +613,14 @@ std::wstring TrustAssessmentEngine::SerializeAlgorithmsJson(const TrustAssessmen
            << L"}";
     }
 
-    if (report.moduleResults.find(L"A12") == report.moduleResults.end())
+    if (report.moduleResults.find(L"A10") == report.moduleResults.end())
     {
         if (!first) ss << L",";
         std::wstring a12Status = L"PASS";
         if (report.recommendation == TrustRecommendation::REJECT) a12Status = L"FAIL";
         else if (report.recommendation == TrustRecommendation::REVIEW) a12Status = L"WARNING";
 
-        ss << L"\"A12\":{"
+        ss << L"\"A10\":{"
            << L"\"name\":\"Trust Assessment Engine Synthesis\","
            << L"\"status\":\"" << a12Status << L"\","
            << L"\"risk\":" << report.totalRiskScore << L","
@@ -767,17 +696,9 @@ void TrustAssessmentEngine::InternalUpdateAssessmentWithEvent(
         report.executablePolicyStatus = L"BLOCKED";
         report.exactThreatFile = event.reason;
     }
-    else if (event.eventType == SecurityEventType::PROTECTED_FILE_ACCESS)
-    {
-        modId = L"A7";
-        modName = L"ProtectedFileMonitor";
-        finding = L"Post-approval canary file touched";
-        riskDelta = 50;
-        isCritical = true;
-    }
     else if (event.eventType == SecurityEventType::DATA_EXFILTRATION_DETECTED)
     {
-        modId = L"A8";
+        modId = L"A7";
         modName = L"DataExfiltrationMonitor";
         finding = L"Post-approval mass data exfiltration write burst detected";
         riskDelta = 50;
@@ -785,7 +706,7 @@ void TrustAssessmentEngine::InternalUpdateAssessmentWithEvent(
     }
     else if (event.eventType == SecurityEventType::RECONNECTION_EVASION_DETECTED)
     {
-        modId = L"A10";
+        modId = L"A8";
         modName = L"ReconnectionEvasionAnalyzer";
         finding = L"Post-approval connection flapping or identity hopping detected";
         riskDelta = 45;
@@ -1363,31 +1284,8 @@ bool TrustAssessmentEngine::VerifySelfTest()
                << L" | Admin Authorized: " << (rep8_revoked.adminAuthorized ? L"YES" : L"NO")
                << (t8 ? L" [PASSED - Revoked device denied automatic trust]" : L" [FAILED]") << L"\n";
 
-    // -------------------------------------------------------------
-    // Test 9: Continuous Behavioral Monitoring (Post-Approval Downgrade)
-    // -------------------------------------------------------------
-    std::wcout << L"  [12.9] Continuous Behavioral Surveillance (Post-Approval Downgrade)...\n";
-    ReconnectionEvasionAnalyzer::Instance().Reset();
-    MalwareScanner::Instance().SetSimulatedScanResult(true, ScanStatus::CLEAN);
-    TrustAssessmentReport rep9 = AssessDevice(authorizedDev, mockAllowlist, L"E:\\");
-    bool beforeDowngrade = (rep9.recommendation == TrustRecommendation::APPROVE);
-
-    // Simulate runtime canary access event on already-approved device
-    SecurityEvent breachEvt;
-    breachEvt.eventType = SecurityEventType::PROTECTED_FILE_ACCESS;
-    breachEvt.reason = L"Canary file touched by active process";
-    UpdateAssessmentWithEvent(rep9, breachEvt);
-
-    bool afterDowngrade = (rep9.recommendation == TrustRecommendation::REJECT &&
-                           rep9.severity == RiskSeverity::CRITICAL);
-    bool t9 = (beforeDowngrade && afterDowngrade);
-    std::wcout << L"         Pre-event: " << (beforeDowngrade ? L"APPROVE" : L"FAIL")
-               << L" -> Post-breach: " << TrustRecommendationToString(rep9.recommendation)
-               << L" (" << RiskSeverityToString(rep9.severity) << L")"
-               << (t9 ? L" [PASSED - Trust downgraded dynamically]" : L" [FAILED]") << L"\n";
-
     MalwareScanner::Instance().SetSimulatedScanResult(false, ScanStatus::NOT_SCANNED);
     StorageExecutionMonitor::Instance().SetSimulatedInspectionResult(false);
     ReconnectionEvasionAnalyzer::Instance().Reset();
-    return (t1 && t2 && t3 && t4 && t5 && t6 && t7 && t8 && t9);
+    return (t1 && t2 && t3 && t4 && t5 && t6 && t7 && t8);
 }

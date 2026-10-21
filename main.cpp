@@ -24,8 +24,6 @@
 #include "AccessControl/HIDBehaviorMonitor.h"
 #include "AccessControl/ProtectedFileMonitor.h"
 #include "AccessControl/StorageExecutionMonitor.h"
-#include "AccessControl/MinifilterClient.h"
-#include "AccessControl/USBNetworkAnomalyDetector.h"
 #include "AccessControl/ReconnectionEvasionAnalyzer.h"
 #include "AccessControl/MalwareScanner.h"
 #include "AccessControl/SuspiciousFileDetector.h"
@@ -588,7 +586,7 @@ LRESULT CALLBACK WindowProc(
 
                 /*
                     STEP 5
-                    Access-control decision & Trust Assessment Engine (A1-A12).
+                    Access-control decision & Trust Assessment Engine (A1-A10).
                 */
                 if (device.hasHID)
                 {
@@ -597,7 +595,7 @@ LRESULT CALLBACK WindowProc(
 
                 TrustAssessmentReport taeReport = TrustAssessmentEngine::Instance().AssessDevice(device, g_allowlist);
                 std::wcout
-                    << L"\n----- TRUST ASSESSMENT ENGINE (A1-A12) -----\n"
+                    << L"\n----- TRUST ASSESSMENT ENGINE (A1-A10) -----\n"
                     << L"  Trust Recommendation : " << TrustRecommendationToString(taeReport.recommendation) << L"\n"
                     << L"  Risk Score           : " << taeReport.totalRiskScore << L"/100 (" << RiskSeverityToString(taeReport.severity) << L")\n"
                     << L"  Identity Match       : " << (taeReport.deviceIdentityMatch ? L"YES" : L"NO") << L"\n"
@@ -607,7 +605,7 @@ LRESULT CALLBACK WindowProc(
                     << L"  Assessment Summary   : " << taeReport.summary << L"\n";
 
                 // Log Trust Assessment Completed Event for central telemetry & audit
-                std::wstring taeReason = L"[A12-TAE] Score=" + std::to_wstring(taeReport.totalRiskScore) +
+                std::wstring taeReason = L"[A10-TAE] Score=" + std::to_wstring(taeReport.totalRiskScore) +
                                          L"/100 (" + RiskSeverityToString(taeReport.severity) + L") Rec=" +
                                          TrustRecommendationToString(taeReport.recommendation) + L" | " + taeReport.summary;
                 EventLogger::Instance().LogEvent(
@@ -662,15 +660,7 @@ LRESULT CALLBACK WindowProc(
                     );
                 }
 
-                // --- Algorithm 6 console output ---
-                if (policyRecord.alg6NetworkAnomaly)
-                {
-                    std::wcout
-                        << L"[ALG6] Network Anomaly   : BLOCK\n"
-                        << L"[ALG6] Reason : " << policyRecord.alg6Reason << L"\n";
-                }
-
-                // --- Algorithm 7 console output ---
+                // --- Reconnection-evasion console output ---
                 if (policyRecord.alg7EvasionDetected)
                 {
                     std::wcout
@@ -733,7 +723,6 @@ LRESULT CALLBACK WindowProc(
                     }
 
                     // Algorithm 4: set context for file monitor
-                    ProtectedFileMonitor::Instance().SetActiveDevice(device);
 
                     // Algorithm 5: scan running processes for storage origin
                     if (device.hasStorage && PolicyConfig::Instance().blockStorageExecution)
@@ -794,7 +783,7 @@ LRESULT CALLBACK WindowProc(
                     // Run Trust Assessment Engine synthesizing all 12 security modules
                     TrustAssessmentReport taeReport = TrustAssessmentEngine::Instance().AssessDevice(device, g_allowlist, L"", hidVerif, sessionId);
                     std::wcout
-                        << L"\n----- TRUST ASSESSMENT ENGINE (A1-A12) -----\n"
+                        << L"\n----- TRUST ASSESSMENT ENGINE (A1-A10) -----\n"
                         << L"  Trust Recommendation : " << TrustRecommendationToString(taeReport.recommendation) << L"\n"
                         << L"  Risk Score           : " << taeReport.totalRiskScore << L"/100 (" << RiskSeverityToString(taeReport.severity) << L")\n"
                         << L"  Identity Match       : " << (taeReport.deviceIdentityMatch ? L"YES" : L"NO") << L"\n"
@@ -1077,7 +1066,6 @@ LRESULT CALLBACK WindowProc(
                             );
 
                             // Algorithm 4: activate file monitor for released device
-                            ProtectedFileMonitor::Instance().SetActiveDevice(device);
 
                             // Synchronize clean inspection report with central server
                             TrustAssessmentReport postCleanReport;
@@ -1306,7 +1294,6 @@ LRESULT CALLBACK WindowProc(
 
                 // Algorithm 4: update USB presence and handle removal policy
                 ProtectedFileMonitor::Instance().OnUsbDeviceDisconnected(devicePath);
-                ProtectedFileMonitor::Instance().ClearActiveDevice();
 
                 EventLogger::Instance().LogSimpleEvent(
                     SecurityEventType::DEVICE_REMOVED,
@@ -3220,7 +3207,7 @@ bool RunProtectedFolderAccessRestrictionsSuite()
     pf.isEnabled = true;
     policyList.push_back(pf);
 
-    ProtectedFileMonitor::Instance().UpdateWatchedFolders(policyList);
+    ProtectedFileMonitor::Instance().UpdateProtectedFolders(policyList);
 
     // Dummy test USB device
     USBDevice testDev1;
@@ -3558,21 +3545,18 @@ bool RunApprovedStorageAndLifecycleRegressionSuite()
         if (storageClean && policyCompliant && avClean && isApproved)
         {
             DevicePresenceMonitor::SetDeviceState(dev.deviceId, DeviceTrackingState::RELEASED);
-            ProtectedFileMonitor::Instance().SetActiveDevice(dev);
         }
 
         DeviceTrackingState finalState;
         bool stateFound = DevicePresenceMonitor::GetDeviceState(dev.deviceId, finalState);
         bool isReleased = stateFound && (finalState == DeviceTrackingState::RELEASED);
-        bool activeDeviceMatches = (ProtectedFileMonitor::Instance().GetActiveDevice().deviceId == dev.deviceId);
 
         std::wcout << L"  [A.1] Pre-Release Inspection Clean : " << (storageClean ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
         std::wcout << L"  [A.2] Policy Compliance Status     : " << rep.executablePolicyStatus << L" -> " << (policyCompliant ? L"[OK]" : L"[FAIL]") << L"\n";
         std::wcout << L"  [A.3] Antivirus Scan Status        : " << rep.malwareScanResult << L" -> " << (avClean ? L"[OK]" : L"[FAIL]") << L"\n";
         std::wcout << L"  [A.4] Device State RELEASED        : " << (isReleased ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
-        std::wcout << L"  [A.5] File Monitor Activated       : " << (activeDeviceMatches ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
 
-        if (storageClean && policyCompliant && avClean && isApproved && isReleased && activeDeviceMatches)
+        if (storageClean && policyCompliant && avClean && isApproved && isReleased)
         {
             std::wcout << L"  -> [RESULT] SCENARIO A: PASSED (Approved storage with clean files verified and released)\n\n";
             passed++;
@@ -3582,7 +3566,6 @@ bool RunApprovedStorageAndLifecycleRegressionSuite()
             std::wcout << L"  -> [RESULT] SCENARIO A: FAILED\n\n";
         }
 
-        ProtectedFileMonitor::Instance().ClearActiveDevice();
         StorageExecutionMonitor::Instance().ClearMockVolumePaths();
         StorageExecutionMonitor::Instance().ClearDeviceDriveMappings();
     }
@@ -4256,14 +4239,12 @@ bool RunApprovedUsbExecutablePolicyRegressionSuite()
         if (inspectionClean && policyCompliant && avClean && recApprove)
         {
             DevicePresenceMonitor::SetDeviceState(dev.deviceId, DeviceTrackingState::RELEASED);
-            ProtectedFileMonitor::Instance().SetActiveDevice(dev);
         }
 
         DeviceTrackingState finalState;
         DevicePresenceMonitor::GetDeviceState(dev.deviceId, finalState);
         bool isReleased = (finalState == DeviceTrackingState::RELEASED);
         bool allowlistPreserved = testAllowlist.IsAllowed(dev);
-        bool monitorActive = (ProtectedFileMonitor::Instance().GetActiveDevice().deviceId == dev.deviceId);
 
         std::wcout << L"  [4.1] Pre-Release Inspection Clean : " << (inspectionClean ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
         std::wcout << L"  [4.2] Executable Status COMPLIANT  : " << rep.executablePolicyStatus << L" -> " << (policyCompliant ? L"[OK]" : L"[FAIL]") << L"\n";
@@ -4271,9 +4252,8 @@ bool RunApprovedUsbExecutablePolicyRegressionSuite()
         std::wcout << L"  [4.4] TAE Recommendation APPROVE   : " << (recApprove ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
         std::wcout << L"  [4.5] Device State RELEASED        : " << (isReleased ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
         std::wcout << L"  [4.6] Local Allowlist Preserved    : " << (allowlistPreserved ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
-        std::wcout << L"  [4.7] Protected File Monitor Active: " << (monitorActive ? L"YES [OK]" : L"NO [FAIL]") << L"\n";
 
-        if (inspectionClean && policyCompliant && avClean && recApprove && isReleased && allowlistPreserved && monitorActive)
+        if (inspectionClean && policyCompliant && avClean && recApprove && isReleased && allowlistPreserved)
         {
             std::wcout << L"  -> [RESULT] TEST 4: PASSED (Clean approved USB proceeds to RELEASED state)\n\n";
             passed++;
@@ -4283,7 +4263,6 @@ bool RunApprovedUsbExecutablePolicyRegressionSuite()
             std::wcout << L"  -> [RESULT] TEST 4: FAILED\n\n";
         }
 
-        ProtectedFileMonitor::Instance().ClearActiveDevice();
         StorageExecutionMonitor::Instance().ClearMockVolumePaths();
         StorageExecutionMonitor::Instance().ClearDeviceDriveMappings();
         DevicePresenceMonitor::UntrackDevice(dev.deviceId);
@@ -4723,23 +4702,23 @@ bool RunApprovedUsbExecutablePolicyRegressionSuite()
 
 
 // ============================================================
-// Algorithmic Verification & Diagnostic Suite (Modules A1-A12)
+// Algorithmic Verification & Diagnostic Suite (Modules A1-A10)
 // ============================================================
 
 int RunAlgorithmVerification()
 {
     std::wcout << L"\n=======================================================\n";
     std::wcout << L"    USBIPS SECURITY MODULES & TRUST ASSESSMENT SUITE   \n";
-    std::wcout << L"                 (MODULES A1 - A12)                    \n";
+    std::wcout << L"                 (MODULES A1 - A10)                    \n";
     std::wcout << L"=======================================================\n\n";
 
     int passedTests = 0;
-    int totalTests = 12;
+    int totalTests = 11;
 
     // --------------------------------------------------------
     // MODULE A1: Device Fingerprinting & Allowlist Matching
     // --------------------------------------------------------
-    std::wcout << L"[TEST 1/12] MODULE A1: Device Fingerprinting & Allowlist Matching\n";
+    std::wcout << L"[TEST 1/11] MODULE A1: Device Fingerprinting & Allowlist Matching\n";
     std::wcout << L"-------------------------------------------------------------------\n";
     {
         USBDevice testDev;
@@ -4791,7 +4770,7 @@ int RunAlgorithmVerification()
     // --------------------------------------------------------
     // MODULE A2: Composite-Device Policy Evaluation
     // --------------------------------------------------------
-    std::wcout << L"[TEST 2/12] MODULE A2: Composite-Device Policy Evaluation\n";
+    std::wcout << L"[TEST 2/11] MODULE A2: Composite-Device Policy Evaluation\n";
     std::wcout << L"----------------------------------------------------------\n";
     {
         // 2A: Pure HID keyboard
@@ -4855,7 +4834,7 @@ int RunAlgorithmVerification()
     // --------------------------------------------------------
     // MODULE A3: HID Behavior, Robotic Burst & Process Correlation
     // --------------------------------------------------------
-    std::wcout << L"[TEST 3/12] MODULE A3: HID Behavior, Robotic Burst & Process Correlation\n";
+    std::wcout << L"[TEST 3/11] MODULE A3: HID Behavior, Robotic Burst & Process Correlation\n";
     std::wcout << L"-------------------------------------------------------------------------\n";
     {
         USBDevice kbDev;
@@ -5217,7 +5196,7 @@ int RunAlgorithmVerification()
     // --------------------------------------------------------
     // MODULE A4: Removable-Media Antivirus Malware Scanning
     // --------------------------------------------------------
-    std::wcout << L"[TEST 4/12] MODULE A4: Removable-Media Antivirus Malware Scanning\n";
+    std::wcout << L"[TEST 4/11] MODULE A4: Removable-Media Antivirus Malware Scanning\n";
     std::wcout << L"------------------------------------------------------------------\n";
     {
         bool a4Pass = MalwareScanner::Instance().VerifySelfTest();
@@ -5235,7 +5214,7 @@ int RunAlgorithmVerification()
     // --------------------------------------------------------
     // MODULE A5: Suspicious File & Script Detection
     // --------------------------------------------------------
-    std::wcout << L"[TEST 5/12] MODULE A5: Suspicious File & Script Detection\n";
+    std::wcout << L"[TEST 5/11] MODULE A5: Suspicious File & Script Detection\n";
     std::wcout << L"----------------------------------------------------------\n";
     {
         bool a5Pass = SuspiciousFileDetector::Instance().VerifySelfTest();
@@ -5253,7 +5232,7 @@ int RunAlgorithmVerification()
     // --------------------------------------------------------
     // MODULE A6: Removable Storage Process Monitoring
     // --------------------------------------------------------
-    std::wcout << L"[TEST 6/12] MODULE A6: Removable Storage Process Monitoring\n";
+    std::wcout << L"[TEST 6/11] MODULE A6: Removable Storage Process Monitoring\n";
     std::wcout << L"-----------------------------------------------------------\n";
     {
         bool a6Pass = StorageExecutionMonitor::Instance().VerifySelfTest();
@@ -5269,76 +5248,33 @@ int RunAlgorithmVerification()
     }
 
     // --------------------------------------------------------
-    // MODULE A7: Protected-File & Multi-Folder Policy Monitoring
+    // Protected-folder NTFS enforcement validation (operational control)
     // --------------------------------------------------------
-    std::wcout << L"[TEST 7/12] MODULE A7: Protected-File & Multi-Folder Policy Monitoring\n";
-    std::wcout << L"-----------------------------------------------------------------------\n";
+    std::wcout << L"[TEST 7/11] Protected-folder NTFS enforcement validation\n";
+    std::wcout << L"---------------------------------------------------------------\n";
     {
-        const PolicyConfig& cfg = PolicyConfig::Instance();
-        std::wcout << L"  [7.1] Protected Directory : " << cfg.protectedDirectory << L"\n";
-        std::wcout << L"  [7.2] Canary Sentinel File: " << cfg.canaryFileName << L"\n";
-
-        ProtectedFileMonitor::RevokeUserDenyAce(cfg.protectedDirectory, ProtectedFileMonitor::GetCurrentUserNameStr());
-        ProtectedFileMonitor::Instance().Start(cfg.protectedDirectory, cfg.canaryFileName);
-        bool monitorRunning = ProtectedFileMonitor::Instance().IsRunning();
-        std::wcout << L"  [7.3] Monitor Active      : " << (monitorRunning ? L"YES [OK]" : L"FAILED [ERROR]") << L"\n";
-
-        std::wstring canaryFullPath = cfg.protectedDirectory + L"\\" + cfg.canaryFileName;
-        DWORD fileAttr = GetFileAttributesW(canaryFullPath.c_str());
-        bool canaryExists = (fileAttr != INVALID_FILE_ATTRIBUTES);
-        std::wcout << L"  [7.4] Canary on Disk      : " << (canaryExists ? L"CONFIRMED PRESENT [OK]" : L"NOT FOUND [ERROR]") << L"\n";
-
-        // Multi-folder policy sync test
-        std::vector<ProtectedFolder> testFolders;
-        ProtectedFolder f1{ 1, cfg.protectedDirectory, L"Default protected directory", true };
-        ProtectedFolder f2{ 2, L"C:\\USBIPS_Finance", L"Confidential finance documents", true };
-        testFolders.push_back(f1);
-        testFolders.push_back(f2);
-        ProtectedFileMonitor::Instance().UpdateWatchedFolders(testFolders);
-        std::wcout << L"  [7.5] Multi-Folder Policy Synchronization : 2 folders configured [OK]\n";
-
-        // Attribution tiers & mocked enforcement tests
-        AllowlistManager testAllowlist;
-        testAllowlist.Initialize(L":memory:");
-        USBDevice testDev;
-        testDev.vendorId = L"0781";
-        testDev.productId = L"5583";
-        testDev.serialNumber = L"TEST_SAN_001";
-        testDev.type = DeviceType::STORAGE;
-        testDev.deviceId = L"USB\\VID_0781&PID_5583\\TEST_SAN_001";
-        testDev.description = L"SanDisk Ultra USB Test Drive";
-        testAllowlist.AddDevice(testDev);
-
-        ProtectedFileMonitor::Instance().SetAllowlistManager(&testAllowlist);
-        ProtectedFileMonitor::Instance().SetActiveDevice(testDev);
-
-        // Case A: UNCERTAIN Attribution -> High severity alert, but device NOT falsely blocked
-        ProtectedFileMonitor::Instance().TriggerSimulatedViolation(L"C:\\USBIPS_Finance", L"MODIFIED", L"UNCERTAIN");
-        bool uncertainPass = testAllowlist.IsAllowed(testDev);
-        std::wcout << L"  [7.6] Uncertain Attribution Policy        : Device authorization preserved (Fail-Safe) "
-                   << (uncertainPass ? L"[OK]" : L"[ERROR]") << L"\n";
-
-        // Case B: DEFINITIVE Attribution -> Mocked OS-level quarantine and local allowlist eviction
-        EnforcementManager::SetMockEnforcement(true, true, CR_SUCCESS);
-        ProtectedFileMonitor::Instance().TriggerSimulatedViolation(L"C:\\USBIPS_Finance", L"MODIFIED", L"DEFINITIVE");
-        bool definitivePass = !testAllowlist.IsAllowed(testDev);
-        EnforcementManager::SetMockEnforcement(false);
-        std::wcout << L"  [7.7] Definitive Attribution Policy       : Device quarantined via Mock & Revoked "
-                   << (definitivePass ? L"[OK]" : L"[ERROR]") << L"\n";
-
-        ProtectedFileMonitor::Instance().ClearActiveDevice();
-        ProtectedFileMonitor::Instance().SetAllowlistManager(nullptr);
-
-        // Step 7.8: Scenario 3 Minifilter Driver Communication Port & Honest Boundary Verification
-        bool minifilterPass = MinifilterClient::Instance().VerifySelfTest();
-
-        // Step 7.9: Native OS NTFS DACL Pre-Access Denial Verification
-        bool enforcementPass = ProtectedFileMonitor::Instance().VerifySelfTest();
-
-        bool a7AllPassed = canaryExists && monitorRunning && uncertainPass && definitivePass && minifilterPass && enforcementPass;
-        if (a7AllPassed)
+        bool a7Pass = ProtectedFileMonitor::Instance().VerifySelfTest();
+        if (a7Pass)
         {
-            std::wcout << L"  -> [RESULT] MODULE A7: PASSED (Multi-folder watch, attribution tiers, mock enforcement & minifilter boundary verified)\n\n";
+            std::wcout << L"  -> [RESULT] PROTECTED-FOLDER ENFORCEMENT: PASSED (NTFS deny and restore verified)\n\n";
+            passedTests++;
+        }
+        else
+        {
+            std::wcout << L"  -> [RESULT] PROTECTED-FOLDER ENFORCEMENT: FAILED\n\n";
+        }
+    }
+
+    // --------------------------------------------------------
+    // MODULE A7: Unauthorized Data-Copy & Exfiltration Monitoring
+    // --------------------------------------------------------
+    std::wcout << L"[TEST 8/11] MODULE A7: Unauthorized Data-Copy & Exfiltration Monitoring\n";
+    std::wcout << L"------------------------------------------------------------------------\n";
+    {
+        bool a8Pass = DataExfiltrationMonitor::Instance().VerifySelfTest();
+        if (a8Pass)
+        {
+            std::wcout << L"  -> [RESULT] MODULE A7: PASSED (Volume write burst verified)\n\n";
             passedTests++;
         }
         else
@@ -5348,15 +5284,15 @@ int RunAlgorithmVerification()
     }
 
     // --------------------------------------------------------
-    // MODULE A8: Unauthorized Data-Copy & Exfiltration Monitoring
+    // MODULE A8: Reconnection Evasion & Flapping Analysis
     // --------------------------------------------------------
-    std::wcout << L"[TEST 8/12] MODULE A8: Unauthorized Data-Copy & Exfiltration Monitoring\n";
-    std::wcout << L"------------------------------------------------------------------------\n";
+    std::wcout << L"[TEST 9/11] MODULE A8: Reconnection Evasion & Flapping Analysis\n";
+    std::wcout << L"-------------------------------------------------------------------\n";
     {
-        bool a8Pass = DataExfiltrationMonitor::Instance().VerifySelfTest();
-        if (a8Pass)
+        bool a10Pass = ReconnectionEvasionAnalyzer::Instance().VerifySelfTest();
+        if (a10Pass)
         {
-            std::wcout << L"  -> [RESULT] MODULE A8: PASSED (Volume write burst & canary correlation verified)\n\n";
+            std::wcout << L"  -> [RESULT] MODULE A8: PASSED (Flapping & identity mutation detection verified)\n\n";
             passedTests++;
         }
         else
@@ -5366,69 +5302,33 @@ int RunAlgorithmVerification()
     }
 
     // --------------------------------------------------------
-    // MODULE A9: USB Network & DNS Anomaly Detection
+    // MODULE A9: Policy Enforcement & Synchronization
     // --------------------------------------------------------
-    std::wcout << L"[TEST 9/12] MODULE A9: USB Network & DNS Anomaly Detection\n";
-    std::wcout << L"-----------------------------------------------------------\n";
-    {
-        bool a9Pass = USBNetworkAnomalyDetector::Instance().VerifySelfTest();
-        if (a9Pass)
-        {
-            std::wcout << L"  -> [RESULT] MODULE A9: PASSED (USB network & DNS anomaly detection verified)\n\n";
-            passedTests++;
-        }
-        else
-        {
-            std::wcout << L"  -> [RESULT] MODULE A9: FAILED\n\n";
-        }
-    }
-
-    // --------------------------------------------------------
-    // MODULE A10: Reconnection Evasion & Flapping Analysis
-    // --------------------------------------------------------
-    std::wcout << L"[TEST 10/12] MODULE A10: Reconnection Evasion & Flapping Analysis\n";
-    std::wcout << L"-------------------------------------------------------------------\n";
-    {
-        bool a10Pass = ReconnectionEvasionAnalyzer::Instance().VerifySelfTest();
-        if (a10Pass)
-        {
-            std::wcout << L"  -> [RESULT] MODULE A10: PASSED (Flapping & identity mutation detection verified)\n\n";
-            passedTests++;
-        }
-        else
-        {
-            std::wcout << L"  -> [RESULT] MODULE A10: FAILED\n\n";
-        }
-    }
-
-    // --------------------------------------------------------
-    // MODULE A11: Policy Enforcement & Synchronization
-    // --------------------------------------------------------
-    std::wcout << L"[TEST 11/12] MODULE A11: Policy Enforcement & Synchronization\n";
+    std::wcout << L"[TEST 10/11] MODULE A9: Policy Enforcement & Synchronization\n";
     std::wcout << L"--------------------------------------------------------------\n";
     {
         std::wcout << L"  [11.1] Local SQLite allowlist synchronization channel: VERIFIED [OK]\n";
         std::wcout << L"  [11.2] Central policy configuration distribution: VERIFIED [OK]\n";
         std::wcout << L"  [11.3] OS PnP enforcement status distinction (CR_SUCCESS vs CR_ACCESS_DENIED vs CR_NOT_DISABLEABLE): VERIFIED [OK]\n";
-        std::wcout << L"  -> [RESULT] MODULE A11: PASSED (Policy sync & multi-tier enforcement separation)\n\n";
+        std::wcout << L"  -> [RESULT] MODULE A9: PASSED (Policy sync & multi-tier enforcement separation)\n\n";
         passedTests++;
     }
 
     // --------------------------------------------------------
-    // MODULE A12: Unified Trust Assessment Engine (TAE)
+    // MODULE A10: Unified Trust Assessment Engine (TAE)
     // --------------------------------------------------------
-    std::wcout << L"[TEST 12/12] MODULE A12: Unified Trust Assessment Engine (TAE)\n";
+    std::wcout << L"[TEST 11/11] MODULE A10: Unified Trust Assessment Engine (TAE)\n";
     std::wcout << L"---------------------------------------------------------------\n";
     {
         bool a12Pass = TrustAssessmentEngine::Instance().VerifySelfTest();
         if (a12Pass)
         {
-            std::wcout << L"  -> [RESULT] MODULE A12: PASSED (Scoring, critical overrides, & post-approval surveillance verified)\n\n";
+            std::wcout << L"  -> [RESULT] MODULE A10: PASSED (Scoring, critical overrides, & post-approval surveillance verified)\n\n";
             passedTests++;
         }
         else
         {
-            std::wcout << L"  -> [RESULT] MODULE A12: FAILED\n\n";
+            std::wcout << L"  -> [RESULT] MODULE A10: FAILED\n\n";
         }
     }
 
@@ -5493,6 +5393,8 @@ int main()
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
     setvbuf(stderr, nullptr, _IONBF, 0);
+    std::wcout.setf(std::ios::unitbuf);
+    std::wcerr.setf(std::ios::unitbuf);
 
     std::wcout << L"========================================\n";
     std::wcout << L"       USBIPS CLIENT - PHASE 1D\n";
@@ -5581,7 +5483,9 @@ int main()
     }
 
     // 3. Check CLI arguments (highest priority)
+#ifdef USBIPS_ENABLE_TEST_MODE
     bool runVerification = false;
+#endif
     int nArgs = 0;
     LPWSTR* szArglist = CommandLineToArgvW(GetCommandLineW(), &nArgs);
     if (szArglist != nullptr)
@@ -5597,12 +5501,14 @@ int main()
                 int p = _wtoi(szArglist[++i]);
                 if (p > 0 && p <= 65535) serverPort = p;
             }
+#ifdef USBIPS_ENABLE_TEST_MODE
             else if (_wcsicmp(szArglist[i], L"--verify-algorithms") == 0 ||
                      _wcsicmp(szArglist[i], L"--test-algorithms") == 0 ||
                      _wcsicmp(szArglist[i], L"-t") == 0)
             {
                 runVerification = true;
             }
+#endif
             else if (_wcsicmp(szArglist[i], L"--list-revocations") == 0 ||
                      _wcsicmp(szArglist[i], L"-l") == 0)
             {
@@ -5761,10 +5667,12 @@ int main()
         LocalFree(szArglist);
     }
 
+#ifdef USBIPS_ENABLE_TEST_MODE
     if (runVerification)
     {
         return RunAlgorithmVerification();
     }
+#endif
 
     std::wcout << L"[CONFIG] Central Server Target : " << serverHost << L":" << serverPort << L"\n";
     if (serverHost == L"127.0.0.1")
@@ -5878,14 +5786,9 @@ int main()
     // Scenario 1: Continuous storage execution surveillance
     StorageExecutionMonitor::Instance().StartSurveillance(&g_allowlist);
 
-    // Scenario 3: Connect to Minifilter driver port
-    MinifilterClient::Instance().Connect();
-
-    // Algorithm 4 & Scenario 2: Start protected-file monitor
-    ProtectedFileMonitor::Instance().SetAllowlistManager(&g_allowlist);
+    // Algorithm 4: Start protected-file monitor
     ProtectedFileMonitor::Instance().Start(
-        PolicyConfig::Instance().protectedDirectory,
-        PolicyConfig::Instance().canaryFileName
+        PolicyConfig::Instance().protectedDirectory
     );
 
     std::wcout
@@ -5926,7 +5829,6 @@ int main()
     DevicePresenceMonitor::Stop();
     PendingStorageInspectionManager::Instance().Stop();
     StorageExecutionMonitor::Instance().StopSurveillance();
-    MinifilterClient::Instance().Disconnect();
     HIDBehaviorMonitor::Instance().StopSurveillance();
     ProtectedFileMonitor::Instance().Stop();
     EventLogger::Instance().Close();

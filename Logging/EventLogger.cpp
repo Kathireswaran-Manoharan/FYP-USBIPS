@@ -285,7 +285,7 @@ bool EventLogger::LogEvent(
                << L" PID: " << (evt.productId.empty() ? L"N/A" : evt.productId)
                << L" | Decision: " << (evt.decision.empty() ? L"-" : evt.decision)
                << L" | Reason: " << evt.reason
-               << L"\n";
+               << L"\n" << std::flush;
 
     return stored;
 }
@@ -345,7 +345,7 @@ bool EventLogger::LogSimpleEvent(
                << L" | DeviceID: " << (deviceId.empty() ? devicePath : deviceId)
                << L" | Decision: " << (decision.empty() ? L"-" : decision)
                << L" | Reason: " << reason
-               << L"\n";
+               << L"\n" << std::flush;
 
     return stored;
 }

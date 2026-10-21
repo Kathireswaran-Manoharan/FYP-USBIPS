@@ -109,7 +109,7 @@ def init_db():
             );
         """)
 
-        # 5. Central Security Policies Table (Algorithms 1-7)
+        # 5. Central Security Policies Table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS policies (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -124,11 +124,8 @@ def init_db():
                 block_unauthorized_composite INTEGER DEFAULT 1,
                 allow_composite_mouse_keyboard INTEGER DEFAULT 1,
                 protected_directory TEXT DEFAULT 'C:\\USBIPS_Protected',
-                canary_file_name TEXT DEFAULT 'confidential_canary.txt',
                 block_storage_execution INTEGER DEFAULT 1,
                 auto_terminate_storage_processes INTEGER DEFAULT 1,
-                block_usb_network_adapters INTEGER DEFAULT 1,
-                alert_on_gateway_override INTEGER DEFAULT 1,
                 max_reconnects_per_minute INTEGER DEFAULT 3,
                 flap_window_seconds INTEGER DEFAULT 15,
                 evasion_risk_threshold INTEGER DEFAULT 70,

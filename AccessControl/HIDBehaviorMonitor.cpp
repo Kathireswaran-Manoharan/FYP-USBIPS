@@ -1121,7 +1121,8 @@ CaptchaOutcome HIDBehaviorMonitor::PromptKeyboardCaptchaChallenge(const USBDevic
     std::wcout << L"[CAPTCHA-UI] Keyboard CAPTCHA message loop ended. Outcome="
                << (state.outcome == CaptchaOutcome::PASS ? L"PASS" :
                   (state.outcome == CaptchaOutcome::TIMEOUT ? L"TIMEOUT" :
-                  (state.outcome == CaptchaOutcome::CANCELLED ? L"CANCELLED" : L"FAIL"))) << L"\n";
+                  (state.outcome == CaptchaOutcome::CANCELLED ? L"CANCELLED" : L"FAIL")))
+               << L"\n" << std::flush;
 
     DeleteObject(hTitleFont);
     DeleteObject(hBigFont);
@@ -1690,7 +1691,11 @@ CaptchaOutcome HIDBehaviorMonitor::PromptMouseCaptchaChallenge(const USBDevice& 
     std::wcout << L"\n[HID-CAPTCHA] ========================================\n"
                << L"[HID-CAPTCHA] Untrusted mouse human verification initiated.\n"
                << L"[HID-CAPTCHA] Device        : " << device.vendorId << L":" << device.productId << L"\n"
-               << L"[HID-CAPTCHA] Target Symbol : " << targetSymbol << L"\n"
+               // Keep console diagnostics ASCII-safe. The symbol glyph remains visible
+               // in the CAPTCHA window, while some Windows console code pages can put
+               // wcout into a failed state when they receive U+25C6/U+2605.
+               << L"[HID-CAPTCHA] Target Symbol : "
+               << targetSymbol.substr(0, targetSymbol.find(L" (")) << L"\n"
                << L"[HID-CAPTCHA] Interaction   : MOUSE POINTER CLICK & CONFIRM\n"
                << L"[HID-CAPTCHA] Timeout       : " << state.secondsLeft << L" seconds\n"
                << L"[HID-CAPTCHA] Max Attempts  : " << state.attemptsLeft << L"\n"
@@ -1962,7 +1967,8 @@ HIDVerificationResult HIDBehaviorMonitor::RunLifecycleVerification(const USBDevi
                << L" Method=" << result.method
                << L" Outcome=" << result.outcome
                << L" Score=" << result.verificationScore << L"/100"
-               << L" Resulting Quarantine State=" << result.reQuarantineResult << L"\n";
+               << L" Resulting Quarantine State=" << result.reQuarantineResult
+               << L"\n" << std::flush;
 
     m_latestVerificationResult = result;
     return result;
@@ -2656,4 +2662,3 @@ bool HIDBehaviorMonitor::GetSimulatedIsTargetDevice() const
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
     return m_simulatedIsTargetDevice;
 }
-

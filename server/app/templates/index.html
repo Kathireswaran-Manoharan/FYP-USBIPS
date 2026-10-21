@@ -135,7 +135,7 @@
       </div>
     </div>
 
-    <!-- Section 4: Fleet Security Policies (Algorithms 1-7) -->
+    <!-- Section 4: Fleet Security Policies -->
     <div class="section" id="policies-section">
       <div class="section-header">
         <div class="section-title">
@@ -178,7 +178,7 @@
 
           <!-- Alg 3 & 4 -->
           <div style="background: #0f172a; padding: 16px; border-radius: 8px; border: 1px solid var(--border-color);">
-            <h4 style="font-size: 13px; color: #38bdf8; margin-bottom: 12px; text-transform: uppercase;">Alg 3 & 4: Composite & File Sentinel</h4>
+            <h4 style="font-size: 13px; color: #38bdf8; margin-bottom: 12px; text-transform: uppercase;">Alg 3 & 4: Composite & Protected Folder</h4>
             <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 13px; cursor: pointer;">
               <input type="checkbox" id="pol_block_unauthorized_composite"> Block Unauthorized Composite (HID+Storage)
             </label>
@@ -189,23 +189,16 @@
               <label style="font-size: 11px; color: var(--text-muted);">Protected Directory Path</label>
               <input type="text" id="pol_protected_directory" class="form-control" style="padding: 6px 10px; font-size: 12px;">
             </div>
-            <div style="margin-top: 6px;">
-              <label style="font-size: 11px; color: var(--text-muted);">Canary Sentinel Filename</label>
-              <input type="text" id="pol_canary_file_name" class="form-control" style="padding: 6px 10px; font-size: 12px;">
-            </div>
           </div>
 
-          <!-- Alg 5, 6 & 7 -->
+          <!-- Alg 5 & 6 -->
           <div style="background: #0f172a; padding: 16px; border-radius: 8px; border: 1px solid var(--border-color);">
-            <h4 style="font-size: 13px; color: #38bdf8; margin-bottom: 12px; text-transform: uppercase;">Alg 5, 6 & 7: Storage, Network & Flapping</h4>
+            <h4 style="font-size: 13px; color: #38bdf8; margin-bottom: 12px; text-transform: uppercase;">Alg 5 & 6: Storage & Flapping</h4>
             <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 13px; cursor: pointer;">
               <input type="checkbox" id="pol_block_storage_execution"> Block Storage Executables
             </label>
             <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 13px; cursor: pointer;">
               <input type="checkbox" id="pol_auto_terminate_storage_processes"> Auto-Terminate Storage Binaries
-            </label>
-            <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 13px; cursor: pointer;">
-              <input type="checkbox" id="pol_block_usb_network_adapters"> Block USB Network Adapters
             </label>
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px;">
               <div>
@@ -374,11 +367,11 @@
         </div>
         <div class="form-group">
           <label>Description / Policy Classification</label>
-          <input type="text" id="new_folder_desc" class="form-control" placeholder="e.g. Financial Data, Source Repositories, Canary">
+          <input type="text" id="new_folder_desc" class="form-control" placeholder="e.g. Financial Data or Source Repositories">
         </div>
         <div class="form-group" style="display: flex; align-items: center; gap: 8px; margin-top: 10px;">
           <input type="checkbox" id="new_folder_enabled" checked style="width: auto; cursor: pointer;">
-          <label for="new_folder_enabled" style="font-size: 13px; cursor: pointer; margin-bottom: 0;">Enable monitoring immediately</label>
+          <label for="new_folder_enabled" style="font-size: 13px; cursor: pointer; margin-bottom: 0;">Enable NTFS enforcement immediately</label>
         </div>
         <div class="modal-footer" style="margin-top: 20px;">
           <button type="button" class="btn btn-secondary" onclick="closeAddFolderModal()">Cancel</button>
@@ -646,12 +639,10 @@
         { id: "A4", name: "Antivirus Removable Media Scan", status: "NOT_APPLICABLE", risk: 0, evidence: "Filesystem scan evaluated for storage endpoints" },
         { id: "A5", name: "Suspicious File & Script Inspection", status: "NOT_APPLICABLE", risk: 0, evidence: "Autorun directives and disguised executables" },
         { id: "A6", name: "Removable Storage Process Origin", status: "NOT_APPLICABLE", risk: 0, evidence: "Execution origin monitoring from removable volumes" },
-        { id: "A7", name: "Protected Directory Canary Sentinel", status: "PASS", risk: 0, evidence: "Confidential canary sentinel untouched" },
-        { id: "A8", name: "Data Exfiltration Burst Monitoring", status: "NOT_APPLICABLE", risk: 0, evidence: "Mass file write volume monitoring" },
-        { id: "A9", name: "USB Network & DNS Anomaly Detection", status: "NOT_APPLICABLE", risk: 0, evidence: "Ethernet/RNDIS adapter policy verification" },
-        { id: "A10", name: "Reconnection Flapping & Evasion", status: "PASS", risk: 0, evidence: "Rapid connect/disconnect frequency within threshold" },
-        { id: "A11", name: "Policy Enforcement & Revocation Sync", status: (reqStatus === "REVOKED" ? "FAIL" : "PASS"), risk: (reqStatus === "REVOKED" ? 50 : 0), evidence: (reqStatus === "REVOKED" ? "Explicit administrator revocation recorded" : "Enforcement channel active; allowlist synced") },
-        { id: "A12", name: "Trust Assessment Engine (TAE) Synthesis", status: (reqStatus === "REVOKED" ? "FAIL" : "PASS"), risk: 0, evidence: "Multi-factor scoring and zero-trust policy evaluation" }
+        { id: "A7", name: "Data Exfiltration Burst Monitoring", status: "NOT_APPLICABLE", risk: 0, evidence: "Mass file write volume monitoring on removable storage" },
+        { id: "A8", name: "Reconnection Flapping & Evasion", status: "PASS", risk: 0, evidence: "Rapid connect/disconnect frequency within threshold" },
+        { id: "A9", name: "Policy Enforcement & Revocation Sync", status: (reqStatus === "REVOKED" ? "FAIL" : "PASS"), risk: (reqStatus === "REVOKED" ? 50 : 0), evidence: (reqStatus === "REVOKED" ? "Explicit administrator revocation recorded" : "Enforcement channel active; allowlist synced") },
+        { id: "A10", name: "Trust Assessment Engine (TAE) Synthesis", status: (reqStatus === "REVOKED" ? "FAIL" : "PASS"), risk: 0, evidence: "Multi-factor scoring and zero-trust policy evaluation" }
       ];
 
       let modules = defaultModules;
@@ -676,18 +667,18 @@
       return `
         <div style="margin-top: 10px; background: #0b1120; border-radius: 6px; padding: 10px; border: 1px solid var(--border-color);">
           <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; color: #38bdf8; margin-bottom: 6px; display: flex; justify-content: space-between;">
-            <span>12 Security Modules Assessment (A1 – A12)</span>
+            <span>10 Security Modules Assessment (A1 – A10)</span>
             <span style="font-size: 10px; color: #94a3b8; font-weight: normal;">Evidence-based numeric risk contribution & observations</span>
           </div>
-          <div style="max-height: 200px; overflow-y: auto;">
-            <table style="width: 100%; font-size: 11px; border-collapse: collapse;">
+          <div class="trust-assessment-table">
+            <table style="width: 100%; font-size: 11px; border-collapse: collapse; table-layout: fixed;">
               <thead>
                 <tr style="border-bottom: 1px solid #1e293b; color: #94a3b8; text-align: left;">
                   <th style="padding: 4px;">ID</th>
-                  <th style="padding: 4px;">Module Name</th>
+                  <th style="padding: 4px;">Module</th>
                   <th style="padding: 4px;">Status</th>
-                  <th style="padding: 4px;">Risk Contribution</th>
-                  <th style="padding: 4px;">Observation / Evidence</th>
+                  <th style="padding: 4px;">Risk</th>
+                  <th style="padding: 4px;">Evidence</th>
                 </tr>
               </thead>
               <tbody>
@@ -910,12 +901,16 @@
         }
 
         return `
-        <div class="pending-card" style="border: 1px solid #334155; background: #0f172a; border-radius: 8px; padding: 16px; margin-bottom: 16px;">
-          <div class="pending-card-header" style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
+        <div class="pending-card device-request-card" data-request-id="${req.request_id}" data-device-key="${req.vendor_id}:${req.product_id}:${req.serial_number || ''}" style="border: 1px solid #334155; background: #0f172a; border-radius: 8px; padding: 16px; margin-bottom: 16px;">
+          <div class="pending-card-header request-header" style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
             <div>
               <div class="pending-card-title" style="font-size: 16px; font-weight: bold; color: #f8fafc; display: flex; align-items: center; gap: 8px;">
                 <span>${req.description || "Unknown USB Device"}</span>
                 <span class="badge ${operationalBadge}" style="font-size: 11px;">${operationalStatus}</span>
+              </div>
+              <div class="device-card-identity">
+                Device ${req.vendor_id}:${req.product_id} · ${req.device_type || "OTHER"}
+                ${req.serial_number ? ` · S/N ${req.serial_number}` : ""}
               </div>
               <div class="pending-meta" style="font-size: 12px; color: #94a3b8; margin-top: 4px;">
                 Request ID: <code>${req.request_id}</code> | Client: <code>${req.client_id}</code> | Time: ${req.requested_at}
@@ -935,7 +930,7 @@
           </div>
 
           <!-- Hardware Identity Grid -->
-          <div class="pending-details" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; font-size: 12px; background: #1e293b; padding: 10px; border-radius: 6px; margin-bottom: 10px;">
+          <div class="pending-details request-details-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; font-size: 12px; background: #1e293b; padding: 10px; border-radius: 6px; margin-bottom: 10px;">
             <div><span class="detail-label" style="color: #94a3b8;">Vendor ID (VID):</span> <span class="detail-val" style="font-family: monospace; color: #38bdf8;">${req.vendor_id}</span></div>
             <div><span class="detail-label" style="color: #94a3b8;">Product ID (PID):</span> <span class="detail-val" style="font-family: monospace; color: #38bdf8;">${req.product_id}</span></div>
             <div><span class="detail-label" style="color: #94a3b8;">Serial Number:</span> <span class="detail-val" style="font-family: monospace; color: #f1f5f9;">${req.serial_number || 'N/A (Missing)'}</span></div>
@@ -943,7 +938,7 @@
           </div>
 
           <!-- Multi-Factor Security Evaluation Attributes -->
-          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 8px; font-size: 12px; background: #131d2e; border: 1px solid #1e293b; padding: 10px; border-radius: 6px; margin-bottom: 10px;">
+          <div class="request-security-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 8px; font-size: 12px; background: #131d2e; border: 1px solid #1e293b; padding: 10px; border-radius: 6px; margin-bottom: 10px;">
             <div>
               <span style="color: #94a3b8;">Identity Match:</span>
               <strong style="color: ${meta.identity_match ? '#4ade80' : '#fbbf24'};">${meta.identity_match ? '✓ MATCH (Local/Master Allowlist)' : '✕ NO MATCH (Unknown Device)'}</strong>
@@ -976,7 +971,7 @@
           </div>
 
           <!-- Lifecycle Verification (CAPTCHA) & Enforcement Panels -->
-          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; margin-bottom: 10px;">
+          <div class="request-lifecycle-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; margin-bottom: 10px;">
             <!-- CAPTCHA Verification Panel -->
             <div style="background: #111827; border: 1px solid #1f2937; border-radius: 6px; padding: 10px;">
               <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; color: #fbbf24; margin-bottom: 6px;">
@@ -1231,10 +1226,8 @@
         document.getElementById("pol_block_unauthorized_composite").checked = p.block_unauthorized_composite;
         document.getElementById("pol_allow_composite_mouse_keyboard").checked = p.allow_composite_mouse_keyboard;
         document.getElementById("pol_protected_directory").value = p.protected_directory;
-        document.getElementById("pol_canary_file_name").value = p.canary_file_name;
         document.getElementById("pol_block_storage_execution").checked = p.block_storage_execution;
         document.getElementById("pol_auto_terminate_storage_processes").checked = p.auto_terminate_storage_processes;
-        document.getElementById("pol_block_usb_network_adapters").checked = p.block_usb_network_adapters;
         document.getElementById("pol_max_reconnects_per_minute").value = p.max_reconnects_per_minute;
         document.getElementById("pol_evasion_risk_threshold").value = p.evasion_risk_threshold;
         policiesLoaded = true;
@@ -1254,11 +1247,8 @@
         block_unauthorized_composite: document.getElementById("pol_block_unauthorized_composite").checked,
         allow_composite_mouse_keyboard: document.getElementById("pol_allow_composite_mouse_keyboard").checked,
         protected_directory: document.getElementById("pol_protected_directory").value || "C:\\USBIPS_Protected",
-        canary_file_name: document.getElementById("pol_canary_file_name").value || "confidential_canary.txt",
         block_storage_execution: document.getElementById("pol_block_storage_execution").checked,
         auto_terminate_storage_processes: document.getElementById("pol_auto_terminate_storage_processes").checked,
-        block_usb_network_adapters: document.getElementById("pol_block_usb_network_adapters").checked,
-        alert_on_gateway_override: true,
         max_reconnects_per_minute: parseInt(document.getElementById("pol_max_reconnects_per_minute").value) || 3,
         flap_window_seconds: 15,
         evasion_risk_threshold: parseInt(document.getElementById("pol_evasion_risk_threshold").value) || 70

@@ -4,6 +4,7 @@
 *.suo
 *.VC.db
 *.VC.opendb
+*.venv
 
 # Build output
 [Bb]uild/
